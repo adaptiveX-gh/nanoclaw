@@ -31,7 +31,10 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+RUN npm install -g agent-browser @anthropic-ai/claude-code @aisuite/chub
+
+# Persist chub annotations per-group (symlink to mounted group workspace)
+RUN ln -s /workspace/group/.chub /home/node/.chub
 
 # Create app directory
 WORKDIR /app
