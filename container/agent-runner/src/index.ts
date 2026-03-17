@@ -409,6 +409,7 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__freqtrade__*',
+        'mcp__tds__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -434,6 +435,15 @@ async function runQuery(
             FREQTRADE_PATH: process.env.FREQTRADE_PATH || 'freqtrade',
             FREQTRADE_DOCS_PATH: process.env.FREQTRADE_DOCS_PATH || '',
             FREQTRADE_STRATEGIES_DIR: process.env.FREQTRADE_STRATEGIES_DIR || '',
+          },
+        },
+        tds: {
+          command: 'node',
+          args: [path.join(path.dirname(mcpServerPath), 'tds-mcp-stdio.js')],
+          env: {
+            TDS_URL: process.env.TDS_URL || '',
+            TDS_API_KEY: process.env.TDS_API_KEY || '',
+            TDS_AGENT_ID: process.env.TDS_AGENT_ID || '',
           },
         },
       },

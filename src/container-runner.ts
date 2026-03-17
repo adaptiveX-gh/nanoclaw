@@ -224,12 +224,24 @@ function buildContainerArgs(
 
   // Forward Freqtrade MCP settings from .env to container
   const ftKeys = [
-    'FREQTRADE_API_URL', 'FREQTRADE_USERNAME', 'FREQTRADE_PASSWORD',
-    'FREQTRADE_PATH', 'FREQTRADE_DOCS_PATH', 'FREQTRADE_STRATEGIES_DIR',
+    'FREQTRADE_API_URL',
+    'FREQTRADE_USERNAME',
+    'FREQTRADE_PASSWORD',
+    'FREQTRADE_PATH',
+    'FREQTRADE_DOCS_PATH',
+    'FREQTRADE_STRATEGIES_DIR',
   ];
   const ftEnv = readEnvFile(ftKeys);
   for (const key of ftKeys) {
     const val = process.env[key] || ftEnv[key];
+    if (val) args.push('-e', `${key}=${val}`);
+  }
+
+  // Forward TDS settings from .env to container
+  const tdsKeys = ['TDS_URL', 'TDS_API_KEY', 'TDS_AGENT_ID'];
+  const tdsEnv = readEnvFile(tdsKeys);
+  for (const key of tdsKeys) {
+    const val = process.env[key] || tdsEnv[key];
     if (val) args.push('-e', `${key}=${val}`);
   }
 
@@ -394,7 +406,7 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line.includes('[FREQTRADE]')) {
+        if (line.includes('[FREQTRADE]') || line.includes('[TDS]')) {
           logger.info({ container: group.folder }, line);
         } else if (line) {
           logger.debug({ container: group.folder }, line);
