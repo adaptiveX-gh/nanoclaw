@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import fs from 'fs';
 import { PassThrough } from 'stream';
 
 // Sentinel markers must match container-runner.ts
@@ -42,6 +43,8 @@ vi.mock('fs', async () => {
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
+      cpSync: vi.fn(),
+      rmSync: vi.fn(),
     },
   };
 });
@@ -206,5 +209,124 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('container-runner sync behavior', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('always syncs agent-runner-src even when directory exists', async () => {
+    const mockFs = await import('fs');
+    const existsSyncMock = vi.mocked(mockFs.default.existsSync);
+    const cpSyncMock = vi.mocked(mockFs.default.cpSync);
+
+    // Make agent-runner source dir exist, AND the group's copy already exist
+    existsSyncMock.mockImplementation((p: fs.PathLike) => {
+      const ps = String(p);
+      if (ps.includes('agent-runner') && ps.includes('src')) return true;
+      if (ps.includes('agent-runner-src')) return true;
+      return false;
+    });
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    // Let container start, then exit
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    // cpSync should be called for agent-runner-src (always sync, not just first-time)
+    const cpSyncCalls = cpSyncMock.mock.calls.map(c => String(c[0]));
+    const agentRunnerCopy = cpSyncCalls.some(src => src.includes('agent-runner'));
+    expect(agentRunnerCopy).toBe(true);
+  });
+
+  it('removes stale skills not present on host', async () => {
+    const mockFs = await import('fs');
+    const existsSyncMock = vi.mocked(mockFs.default.existsSync);
+    const readdirSyncMock = vi.mocked(mockFs.default.readdirSync);
+    const statSyncMock = vi.mocked(mockFs.default.statSync);
+    const rmSyncMock = vi.mocked(mockFs.default.rmSync);
+
+    // Skills source has "freqtrade-mcp" only
+    // Skills destination has "freqtrade-mcp" AND "old-removed-skill"
+    existsSyncMock.mockImplementation((p: fs.PathLike) => {
+      const ps = String(p);
+      if (ps.includes('container') && ps.includes('skills')) return true;
+      if (ps.includes('.claude') && ps.includes('skills')) return true;
+      return false;
+    });
+
+    let readdirCallCount = 0;
+    readdirSyncMock.mockImplementation((_p: fs.PathLike) => {
+      readdirCallCount++;
+      const ps = String(_p);
+      // First call: source skills dir → host skills
+      if (ps.includes('container') && ps.includes('skills')) {
+        return ['freqtrade-mcp'] as unknown as ReturnType<typeof mockFs.default.readdirSync>;
+      }
+      // Second call: destination skills dir → has stale skill
+      if (ps.includes('.claude') && ps.includes('skills')) {
+        return ['freqtrade-mcp', 'old-removed-skill'] as unknown as ReturnType<typeof mockFs.default.readdirSync>;
+      }
+      return [] as unknown as ReturnType<typeof mockFs.default.readdirSync>;
+    });
+
+    statSyncMock.mockReturnValue({
+      isDirectory: () => true,
+    } as ReturnType<typeof mockFs.default.statSync>);
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    // rmSync should be called for the stale skill
+    const rmCalls = rmSyncMock.mock.calls.map(c => String(c[0]));
+    const removedStale = rmCalls.some(p => p.includes('old-removed-skill'));
+    expect(removedStale).toBe(true);
+  });
+
+  it('does not mount swarm reports when directory missing', async () => {
+    const mockFs = await import('fs');
+    const existsSyncMock = vi.mocked(mockFs.default.existsSync);
+
+    // existsSync returns false by default (from module mock) — swarm dir doesn't exist
+    existsSyncMock.mockReturnValue(false);
+
+    const { spawn } = await import('child_process');
+    const spawnMock = vi.mocked(spawn);
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    // spawn args should NOT contain swarm-reports mount
+    const args = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+    const argsStr = args?.join(' ') || '';
+    expect(argsStr).not.toContain('swarm-reports');
   });
 });

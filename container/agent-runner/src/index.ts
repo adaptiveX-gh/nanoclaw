@@ -324,6 +324,68 @@ function waitForIpcMessage(): Promise<string | null> {
 }
 
 /**
+ * Build MCP servers config, only including servers whose dependencies are present.
+ * nanoclaw + freqtrade are always loaded; tds and swarm are conditional.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput): Record<string, any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const servers: Record<string, any> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+    freqtrade: {
+      command: 'python3',
+      args: ['/app/freqtrade-mcp/__main__.py'],
+      env: {
+        FREQTRADE_API_URL: process.env.FREQTRADE_API_URL || '',
+        FREQTRADE_USERNAME: process.env.FREQTRADE_USERNAME || '',
+        FREQTRADE_PASSWORD: process.env.FREQTRADE_PASSWORD || '',
+        FREQTRADE_PATH: process.env.FREQTRADE_PATH || 'freqtrade',
+        FREQTRADE_DOCS_PATH: process.env.FREQTRADE_DOCS_PATH || '',
+        FREQTRADE_STRATEGIES_DIR: process.env.FREQTRADE_STRATEGIES_DIR || '',
+      },
+    },
+  };
+
+  // TDS: only load if URL is configured
+  if (process.env.TDS_URL) {
+    servers.tds = {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'tds-mcp-stdio.js')],
+      env: {
+        TDS_URL: process.env.TDS_URL,
+        TDS_API_KEY: process.env.TDS_API_KEY || '',
+        TDS_AGENT_ID: process.env.TDS_AGENT_ID || '',
+      },
+    };
+    log('MCP: tds enabled (TDS_URL set)');
+  }
+
+  // Swarm: only load if report directory exists
+  const swarmDir = process.env.SWARM_REPORT_DIR || '/workspace/extra/swarm-reports';
+  if (fs.existsSync(swarmDir)) {
+    servers.swarm = {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'swarm-mcp-stdio.js')],
+      env: {
+        SWARM_REPORT_DIR: swarmDir,
+      },
+    };
+    log('MCP: swarm enabled (report dir exists)');
+  }
+
+  log(`MCP servers: ${Object.keys(servers).join(', ')}`);
+  return servers;
+}
+
+/**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
  * allowing agent teams subagents to run to completion.
@@ -416,45 +478,7 @@ async function runQuery(
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-        freqtrade: {
-          command: 'python3',
-          args: ['/app/freqtrade-mcp/__main__.py'],
-          env: {
-            FREQTRADE_API_URL: process.env.FREQTRADE_API_URL || '',
-            FREQTRADE_USERNAME: process.env.FREQTRADE_USERNAME || '',
-            FREQTRADE_PASSWORD: process.env.FREQTRADE_PASSWORD || '',
-            FREQTRADE_PATH: process.env.FREQTRADE_PATH || 'freqtrade',
-            FREQTRADE_DOCS_PATH: process.env.FREQTRADE_DOCS_PATH || '',
-            FREQTRADE_STRATEGIES_DIR: process.env.FREQTRADE_STRATEGIES_DIR || '',
-          },
-        },
-        tds: {
-          command: 'node',
-          args: [path.join(path.dirname(mcpServerPath), 'tds-mcp-stdio.js')],
-          env: {
-            TDS_URL: process.env.TDS_URL || '',
-            TDS_API_KEY: process.env.TDS_API_KEY || '',
-            TDS_AGENT_ID: process.env.TDS_AGENT_ID || '',
-          },
-        },
-        swarm: {
-          command: 'node',
-          args: [path.join(path.dirname(mcpServerPath), 'swarm-mcp-stdio.js')],
-          env: {
-            SWARM_REPORT_DIR: process.env.SWARM_REPORT_DIR || '/workspace/extra/swarm-reports',
-          },
-        },
-      },
+      mcpServers: buildMcpServers(mcpServerPath, containerInput),
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
       },

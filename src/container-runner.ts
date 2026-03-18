@@ -151,11 +151,24 @@ function buildVolumeMounts(
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
+    const srcSkills = new Set<string>();
     for (const skillDir of fs.readdirSync(skillsSrc)) {
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
+      srcSkills.add(skillDir);
       const dstDir = path.join(skillsDst, skillDir);
       fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+    // Remove stale skills that no longer exist on host
+    if (fs.existsSync(skillsDst)) {
+      for (const existing of fs.readdirSync(skillsDst)) {
+        if (!srcSkills.has(existing)) {
+          const stale = path.join(skillsDst, existing);
+          if (fs.statSync(stale).isDirectory()) {
+            fs.rmSync(stale, { recursive: true });
+          }
+        }
+      }
     }
   }
   mounts.push({
@@ -176,9 +189,10 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Copy agent-runner source into a per-group writable location so agents
+  // Sync agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
+  // Always re-sync so host updates (new MCP servers, bug fixes) propagate.
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -191,7 +205,7 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
+  if (fs.existsSync(agentRunnerSrc)) {
     fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
   }
   mounts.push({
@@ -439,7 +453,11 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line.includes('[FREQTRADE]') || line.includes('[TDS]') || line.includes('[SWARM]')) {
+        if (
+          line.includes('[FREQTRADE]') ||
+          line.includes('[TDS]') ||
+          line.includes('[SWARM]')
+        ) {
           logger.info({ container: group.folder }, line);
         } else if (line) {
           logger.debug({ container: group.folder }, line);
