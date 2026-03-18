@@ -89,7 +89,10 @@
       "Bash(ls /d/Users/scale/Code/nanoclaw/src/env*)",
       "Bash(./container/build.sh)",
       "Bash(gh api repos/freqtrade/freqtrade/contents/Dockerfile --jq '.content')",
-      "Bash(pip install freqtrade --dry-run)"
+      "Bash(pip install freqtrade --dry-run)",
+      "Bash(xargs cat)",
+      "Bash(npx vitest run src/container-runner.test.ts)",
+      "Bash(npx vitest run)"
     ]
   }
 }

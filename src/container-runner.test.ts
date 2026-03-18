@@ -236,11 +236,7 @@ describe('container-runner sync behavior', () => {
       return false;
     });
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     // Let container start, then exit
     fakeProc.emit('close', 0);
@@ -248,8 +244,10 @@ describe('container-runner sync behavior', () => {
     await resultPromise;
 
     // cpSync should be called for agent-runner-src (always sync, not just first-time)
-    const cpSyncCalls = cpSyncMock.mock.calls.map(c => String(c[0]));
-    const agentRunnerCopy = cpSyncCalls.some(src => src.includes('agent-runner'));
+    const cpSyncCalls = cpSyncMock.mock.calls.map((c) => String(c[0]));
+    const agentRunnerCopy = cpSyncCalls.some((src) =>
+      src.includes('agent-runner'),
+    );
     expect(agentRunnerCopy).toBe(true);
   });
 
@@ -275,11 +273,15 @@ describe('container-runner sync behavior', () => {
       const ps = String(_p);
       // First call: source skills dir → host skills
       if (ps.includes('container') && ps.includes('skills')) {
-        return ['freqtrade-mcp'] as unknown as ReturnType<typeof mockFs.default.readdirSync>;
+        return ['freqtrade-mcp'] as unknown as ReturnType<
+          typeof mockFs.default.readdirSync
+        >;
       }
       // Second call: destination skills dir → has stale skill
       if (ps.includes('.claude') && ps.includes('skills')) {
-        return ['freqtrade-mcp', 'old-removed-skill'] as unknown as ReturnType<typeof mockFs.default.readdirSync>;
+        return ['freqtrade-mcp', 'old-removed-skill'] as unknown as ReturnType<
+          typeof mockFs.default.readdirSync
+        >;
       }
       return [] as unknown as ReturnType<typeof mockFs.default.readdirSync>;
     });
@@ -288,19 +290,15 @@ describe('container-runner sync behavior', () => {
       isDirectory: () => true,
     } as ReturnType<typeof mockFs.default.statSync>);
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
     await resultPromise;
 
     // rmSync should be called for the stale skill
-    const rmCalls = rmSyncMock.mock.calls.map(c => String(c[0]));
-    const removedStale = rmCalls.some(p => p.includes('old-removed-skill'));
+    const rmCalls = rmSyncMock.mock.calls.map((c) => String(c[0]));
+    const removedStale = rmCalls.some((p) => p.includes('old-removed-skill'));
     expect(removedStale).toBe(true);
   });
 
@@ -314,11 +312,7 @@ describe('container-runner sync behavior', () => {
     const { spawn } = await import('child_process');
     const spawnMock = vi.mocked(spawn);
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
