@@ -22,6 +22,10 @@ groups/global/*
 *.keys.json
 .env
 
+# Python
+__pycache__/
+*.pyc
+
 # Temp files
 .tmp-*
 
