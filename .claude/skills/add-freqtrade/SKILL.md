@@ -55,8 +55,11 @@ RUN cd /tmp && \
 Change the pip install line to include `freqtrade`:
 
 ```dockerfile
-RUN pip install --break-system-packages freqtrade freqtrade-client "mcp[cli]"
+RUN pip install --break-system-packages "freqtrade[hyperopt]" freqtrade-client "mcp[cli]" ta
 ```
+
+> The `[hyperopt]` extra installs optuna, scikit-learn, scikit-optimize, scipy,
+> joblib, and filelock — all required for hyperopt and walk-forward optimization.
 
 Add the default binary path:
 
@@ -157,7 +160,7 @@ docker builder prune -f
 To pin a specific version:
 
 ```dockerfile
-RUN pip install --break-system-packages "freqtrade==2024.11" freqtrade-client "mcp[cli]"
+RUN pip install --break-system-packages "freqtrade[hyperopt]==2024.11" freqtrade-client "mcp[cli]" ta
 ```
 
 ### Image size
