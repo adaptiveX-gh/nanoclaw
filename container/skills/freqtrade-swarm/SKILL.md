@@ -2,17 +2,17 @@
 name: freqtrade-swarm
 description: >
   Use this skill for viewing overnight strategy research results from
-  freqtrade-swarm. Read morning reports, leaderboards, run status, and
-  archived results. All tools are read-only — swarm runs are triggered
-  by the host scheduler, not from agent sessions.
+  freqtrade-swarm, and for triggering matrix sweep jobs (grid tests across
+  pairs × timeframes). Read morning reports, leaderboards, run status, and
+  archived results. Trigger new sweep runs and poll their progress.
 ---
 
-# Freqtrade Swarm — Overnight Strategy Research Reports
+# Freqtrade Swarm — Strategy Research & Matrix Sweep
 
-6 read-only tools for viewing strategy screening results produced by the
-freqtrade-swarm overnight pipeline.
+9 tools for viewing strategy screening results and triggering matrix sweep
+jobs via the freqtrade-swarm engine.
 
-## Tools
+## Read-Only Tools (6)
 
 | Tool | What it does |
 |------|-------------|
@@ -22,6 +22,14 @@ freqtrade-swarm overnight pipeline.
 | `swarm_list_runs` | List all archived runs with timestamps |
 | `swarm_run_details` | Get leaderboard + status for a specific archived run |
 | `swarm_health` | Check if report directory is configured and has recent data |
+
+## Trigger Tools (3)
+
+| Tool | What it does |
+|------|-------------|
+| `swarm_trigger_run` | Submit a matrix sweep job. Returns a `run_id` for polling |
+| `swarm_poll_run` | Check status of a submitted run (queued/running/completed/failed) |
+| `swarm_cancel_run` | Cancel a running or queued sweep job |
 
 ## Common Patterns
 
@@ -37,9 +45,27 @@ freqtrade-swarm overnight pipeline.
 1. `swarm_list_runs` → get available run IDs
 2. `swarm_run_details` with each run_id → compare leaderboards
 
-**Troubleshoot missing reports:**
-1. `swarm_health` → check directory exists, data freshness
-2. If `last_status_fresh` is false, the swarm hasn't run recently
+**Trigger a grid test (matrix sweep):**
+1. Build a `MatrixSweepSpec` JSON with genome, pairs, timeframes
+2. `swarm_trigger_run` with the spec JSON → get `run_id`
+3. `swarm_poll_run` with `run_id` → check progress until completed
+4. Results appear in the report directory
+
+**MatrixSweepSpec JSON format:**
+```json
+{
+  "genome": { ... },
+  "pairs": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+  "timeframes": ["15m", "1h", "4h"],
+  "n_walkforward_windows": 4,
+  "fees": [0.001],
+  "exchange": "binance"
+}
+```
+
+**Cancel a running job:**
+1. `swarm_cancel_run` with `run_id` → writes cancel marker
+2. Host runner stops the process on next poll
 
 ## Leaderboard Metrics
 
@@ -52,9 +78,20 @@ freqtrade-swarm overnight pipeline.
 | `win_rate` | Percentage of winning trades |
 | `composite_score` | Weighted combination of all metrics |
 
+## Sweep Report Output
+
+Matrix sweep jobs produce three analytical outputs:
+
+| Output | Description |
+|--------|-------------|
+| **Heatmap** | Pair × timeframe grid with Sharpe, consistency, max drawdown |
+| **Top-K ranking** | Weighted composite score across all combinations |
+| **Cluster analysis** | Hierarchical clustering of performance profiles |
+
 ## Notes
 
-- Reports are produced by the freqtrade-swarm nightly pipeline running on the host
 - Report directory: `/workspace/extra/swarm-reports` (read-only mount)
-- Swarm runs take hours; they are NOT triggered from agent sessions
-- The host scheduler (cron/systemd timer) triggers runs automatically
+- Request queue: `/workspace/extra/swarm-reports/requests` (writable mount)
+- Nightly runs are triggered by the host scheduler (cron/systemd timer)
+- Matrix sweeps can be triggered from agent sessions via `swarm_trigger_run`
+- Large sweeps (100+ combinations) take hours — use `swarm_poll_run` to monitor

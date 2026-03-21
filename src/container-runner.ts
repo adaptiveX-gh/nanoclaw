@@ -239,6 +239,20 @@ function buildVolumeMounts(
     });
   }
 
+  // Swarm request queue (writable for main group only — agents submit run requests here)
+  if (isMain) {
+    const swarmRequestDir = path.join(
+      process.env.SWARM_REPORT_DIR || path.join(DATA_DIR, 'swarm-reports'),
+      'requests',
+    );
+    fs.mkdirSync(swarmRequestDir, { recursive: true });
+    mounts.push({
+      hostPath: swarmRequestDir,
+      containerPath: '/workspace/extra/swarm-reports/requests',
+      readonly: false,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(

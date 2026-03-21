@@ -192,6 +192,96 @@ server.tool(
   },
 );
 
+// ─── Trigger Tools ──────────────────────────────────────────────────
+
+const REQUEST_DIR = path.join(REPORT_DIR, 'requests');
+
+server.tool(
+  'swarm_trigger_run',
+  'Submit a matrix sweep or nightly run request. Writes a spec JSON to the request queue; the host-side runner picks it up and spawns the freqtrade-swarm process. Returns a run_id for polling.',
+  {
+    spec_json: z.string().describe('MatrixSweepSpec JSON string (genome, pairs, timeframes, n_walkforward_windows)'),
+    run_type: z.string().optional().describe('Run type: "matrix_sweep" (default) or "nightly"'),
+  },
+  async (args) => {
+    try {
+      // Validate JSON
+      const spec = JSON.parse(args.spec_json);
+
+      const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      fs.mkdirSync(REQUEST_DIR, { recursive: true });
+
+      // Write spec file
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.spec.json`),
+        JSON.stringify(spec, null, 2),
+      );
+
+      // Write request manifest
+      const manifest = {
+        run_id: runId,
+        run_type: args.run_type || 'matrix_sweep',
+        submitted_at: new Date().toISOString(),
+      };
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.request.json`),
+        JSON.stringify(manifest, null, 2),
+      );
+
+      log(`Trigger: submitted ${runId} (type=${manifest.run_type})`);
+      return ok({ run_id: runId, status: 'submitted', message: 'Request queued. Use swarm_poll_run to check progress.' });
+    } catch (e) {
+      return err(`Failed to submit run: ${(e as Error).message}`);
+    }
+  },
+);
+
+server.tool(
+  'swarm_poll_run',
+  'Check the status of a submitted swarm run by its run_id. Returns status (queued/running/completed/failed), exit code, and timestamps.',
+  {
+    run_id: z.string().describe('Run ID returned by swarm_trigger_run'),
+  },
+  async (args) => {
+    try {
+      const statusPath = path.join(REQUEST_DIR, `${args.run_id}.status.json`);
+      if (!fs.existsSync(statusPath)) {
+        // Check if request exists but hasn't been picked up yet
+        const requestPath = path.join(REQUEST_DIR, `${args.run_id}.request.json`);
+        if (fs.existsSync(requestPath)) {
+          return ok({ run_id: args.run_id, status: 'queued', message: 'Request is queued but not yet started by the host runner.' });
+        }
+        return err(`Run not found: ${args.run_id}. Use swarm_trigger_run to submit a new run.`);
+      }
+
+      const status = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+      log(`Poll: ${args.run_id} → ${status.status}`);
+      return ok(status);
+    } catch (e) {
+      return err(`Failed to poll run: ${(e as Error).message}`);
+    }
+  },
+);
+
+server.tool(
+  'swarm_cancel_run',
+  'Cancel a running or queued swarm run by writing a cancel marker. The host runner will stop the process on next poll.',
+  {
+    run_id: z.string().describe('Run ID to cancel'),
+  },
+  async (args) => {
+    try {
+      const cancelPath = path.join(REQUEST_DIR, `${args.run_id}.cancel`);
+      fs.mkdirSync(REQUEST_DIR, { recursive: true });
+      fs.writeFileSync(cancelPath, JSON.stringify({ cancelled_at: new Date().toISOString() }));
+      log(`Cancel: wrote cancel marker for ${args.run_id}`);
+      return ok({ run_id: args.run_id, status: 'cancel_requested', message: 'Cancel marker written. The host runner will stop the process shortly.' });
+    } catch (e) {
+      return err(`Failed to cancel run: ${(e as Error).message}`);
+    }
+  },
+);
+
 // ─── Start ───────────────────────────────────────────────────────────
 
 log(`Starting Swarm MCP server (report_dir=${REPORT_DIR})`);
