@@ -2,15 +2,17 @@
 name: freqtrade-swarm
 description: >
   Use this skill for viewing overnight strategy research results from
-  freqtrade-swarm, and for triggering matrix sweep jobs (grid tests across
-  pairs × timeframes). Read morning reports, leaderboards, run status, and
-  archived results. Trigger new sweep runs and poll their progress.
+  freqtrade-swarm, triggering matrix sweep jobs (grid tests across
+  pairs × timeframes), and running autoresearch batch mutation testing.
+  Read morning reports, leaderboards, run status, and archived results.
+  Trigger new sweep runs, autoresearch batches, and poll their progress.
 ---
 
-# Freqtrade Swarm — Strategy Research & Matrix Sweep
+# Freqtrade Swarm — Strategy Research, Matrix Sweep & Autoresearch
 
-10 tools for viewing strategy screening results and triggering matrix sweep
-jobs via the freqtrade-swarm engine.
+11 tools for viewing strategy screening results, triggering matrix sweep
+jobs, and running parallel autoresearch mutation batches via the
+freqtrade-swarm engine.
 
 ## Read-Only Tools (6)
 
@@ -23,14 +25,15 @@ jobs via the freqtrade-swarm engine.
 | `swarm_run_details` | Get leaderboard + status for a specific archived run |
 | `swarm_health` | Check if report directory is configured and has recent data |
 
-## Trigger Tools (4)
+## Trigger Tools (5)
 
 | Tool | What it does |
 |------|-------------|
-| `swarm_trigger_run` | Submit a matrix sweep job. Returns a `run_id` for polling |
+| `swarm_trigger_run` | Submit a matrix sweep job with parallel workers. Returns a `run_id` for polling |
+| `swarm_trigger_autoresearch` | Submit a mutation batch: expand seeds → compile → walk-forward → classify keepers/rejects |
 | `swarm_poll_run` | Check status of a submitted run (queued/running/completed/failed) |
-| `swarm_job_results` | Read full results of a completed job (heatmap, top-K, clusters) |
-| `swarm_cancel_run` | Cancel a running or queued sweep job |
+| `swarm_job_results` | Read full results of a completed job (sweep results or autoresearch keepers/rejects) |
+| `swarm_cancel_run` | Cancel a running or queued job |
 
 ## Common Patterns
 
@@ -48,9 +51,16 @@ jobs via the freqtrade-swarm engine.
 
 **Trigger a grid test (matrix sweep):**
 1. Build a `MatrixSweepSpec` JSON with genome, pairs, timeframes, timerange
-2. `swarm_trigger_run` with the spec JSON → get `run_id`
-3. `swarm_poll_run` with `run_id` → check progress until completed
+2. `swarm_trigger_run` with the spec JSON, `workers`, and `priority` → get `run_id`
+3. `swarm_poll_run` with `run_id` → check progress (shows task counts, ETA) until completed
 4. `swarm_job_results` with `run_id` → get heatmap, top-K, clusters, per-combo metrics
+
+**swarm_trigger_run parameters:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `spec_json` | string | required | MatrixSweepSpec JSON |
+| `workers` | number | 4 | Parallel backtest workers (1-8). Use 4 for ≤50 combos, 6 for 50-100, 8 for 100+ |
+| `priority` | string | "normal" | "high" for interactive requests (jumps queue), "normal" for scheduled |
 
 **MatrixSweepSpec JSON format:**
 ```json
@@ -68,6 +78,76 @@ jobs via the freqtrade-swarm engine.
 **Cancel a running job:**
 1. `swarm_cancel_run` with `run_id` → writes cancel marker
 2. Host runner stops the process on next poll
+
+**Run autoresearch mutation batch:**
+1. Query TDS for prior discards: `tds_query` with verb="discarded", object_type="genome_variant" → get genome IDs to skip
+2. Build `AutoresearchSpec` JSON with seed genomes (from registry/frontier), mutations_per_genome, timerange
+3. `swarm_trigger_autoresearch` with spec, `workers`, `priority` → get `run_id`
+4. `swarm_poll_run` with `run_id` → check progress until completed
+5. `swarm_job_results` with `run_id` → get keepers/rejects with Sharpe comparison
+6. For each keeper: attest with `sdna_attest` → register in strategy registry
+7. For each reject: log to TDS with `tds_record` (verb="discarded")
+
+**swarm_trigger_autoresearch parameters:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `spec_json` | string | required | AutoresearchSpec JSON |
+| `workers` | number | 4 | Parallel workers (1-8). Use 4 for ≤10 variants, 6 for 10-20, 8 for 20+ |
+| `priority` | string | "normal" | "high" for interactive, "normal" for background |
+
+**AutoresearchSpec JSON format:**
+```json
+{
+  "seed_genomes": [
+    {
+      "genome": { "identity": { "name": "ADXMomentum", "genome_id": "abc123" }, ... },
+      "pair": "BTC/USDT:USDT",
+      "timeframe": "1h",
+      "parent_sharpe": 1.2
+    }
+  ],
+  "mutations_per_genome": 7,
+  "mutation_seed": 42,
+  "timerange": "20250101-20260301",
+  "n_walkforward_windows": 4,
+  "keeper_sharpe_threshold": 0.0,
+  "parent_sharpe_gate": true,
+  "screen_sharpe_threshold": -0.5,
+  "discard_hashes": ["previously_tested_genome_id_1", "..."],
+  "exchange": "binance"
+}
+```
+
+**Autoresearch results format (from swarm_job_results):**
+```json
+{
+  "status": "completed",
+  "total_variants": 21,
+  "keepers": [
+    {
+      "variant_genome_id": "...",
+      "parent_genome_id": "...",
+      "pair": "BTC/USDT:USDT",
+      "timeframe": "1h",
+      "mutations": [{"family": "adjust_params", "description": "..."}],
+      "mean_sharpe": 1.5,
+      "parent_sharpe": 1.2,
+      "sharpe_delta": 0.3,
+      "composite_score": 0.545,
+      "screened_out": false,
+      "is_keeper": true,
+      "reason": "sharpe_improved"
+    }
+  ],
+  "rejects": [...]
+}
+```
+
+**Progressive filtering (screen_sharpe_threshold):**
+When set (e.g. `-0.5`), each variant runs only window 1 first. If its Sharpe is below the threshold, remaining windows are skipped (~75% compute saved per rejected variant). Screened-out variants appear in rejects with `"screened_out": true`. Omit or set to `null` to disable screening.
+
+**Keeper scoring:**
+Variants are ranked by composite score: `0.5 × sharpe_delta + 0.3 × consistency + 0.2 × (1 + worst_drawdown)`. A variant must pass all gates (absolute threshold, parent gate, positive composite) to be a keeper.
 
 ## Leaderboard Metrics
 
@@ -90,10 +170,27 @@ Matrix sweep jobs produce three analytical outputs:
 | **Top-K ranking** | Weighted composite score across all combinations |
 | **Cluster analysis** | Hierarchical clustering of performance profiles |
 
+## Progress Polling
+
+During a running sweep, `swarm_poll_run` returns live progress:
+```json
+{
+  "status": "running",
+  "tasks": { "total": 100, "completed": 47, "failed": 2, "running": 4, "pending": 47 },
+  "elapsed_seconds": 720,
+  "estimated_remaining_seconds": 420,
+  "workers_active": 4,
+  "current_tasks": [{"pair": "BTC/USDT:USDT", "timeframe": "1h"}, ...]
+}
+```
+
 ## Notes
 
 - Report directory: `/workspace/extra/swarm-reports` (read-only mount)
 - Request queue: `/workspace/extra/swarm-reports/requests` (writable mount)
-- Nightly runs are triggered by the host scheduler (cron/systemd timer)
-- Matrix sweeps can be triggered from agent sessions via `swarm_trigger_run`
-- Large sweeps (100+ combinations) take hours — use `swarm_poll_run` to monitor
+- The swarm runner is always on — jobs are picked up within 3 seconds of submission
+- Matrix sweeps: `swarm_trigger_run` for pair × timeframe grid testing
+- Autoresearch: `swarm_trigger_autoresearch` for parallel mutation testing of seed genomes
+- Use `swarm_poll_run` every 2 minutes to report progress to the user
+- Both job types write progress to the same status file format — polling is identical
+- After autoresearch completes: attest keepers with sdna tools, log rejects to TDS

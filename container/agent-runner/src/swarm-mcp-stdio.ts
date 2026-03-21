@@ -1,7 +1,7 @@
 /**
  * Stdio MCP Server for NanoClaw Freqtrade Swarm Integration
- * Read-only process providing 6 tools for viewing overnight strategy
- * research reports produced by freqtrade-swarm.
+ * Provides 11 tools: 6 read-only for viewing strategy research reports,
+ * 5 trigger tools for matrix sweeps, autoresearch batches, and job management.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -198,10 +198,12 @@ const REQUEST_DIR = path.join(REPORT_DIR, 'requests');
 
 server.tool(
   'swarm_trigger_run',
-  'Submit a matrix sweep or nightly run request. Writes a spec JSON to the request queue; the host-side runner picks it up and spawns the freqtrade-swarm process. Returns a run_id for polling.',
+  'Submit a matrix sweep or nightly run request. Writes a spec JSON to the request queue; the host-side runner picks it up and spawns the freqtrade-swarm process with the specified worker count. Returns a run_id for polling with swarm_poll_run.',
   {
     spec_json: z.string().describe('MatrixSweepSpec JSON string (genome, pairs, timeframes, n_walkforward_windows)'),
     run_type: z.string().optional().describe('Run type: "matrix_sweep" (default) or "nightly"'),
+    workers: z.number().optional().describe('Parallel worker count: 4 for small sweeps (≤50 combos), 6 for medium, 8 for large (100+). Default 4, max 8.'),
+    priority: z.string().optional().describe('Queue priority: "high" for interactive user requests (jumps queue), "normal" for scheduled/background. Default "normal".'),
   },
   async (args) => {
     try {
@@ -217,19 +219,23 @@ server.tool(
         JSON.stringify(spec, null, 2),
       );
 
-      // Write request manifest
+      // Write request manifest with workers and priority
+      const workers = Math.min(Math.max(args.workers || 4, 1), 8);
+      const priority = args.priority === 'high' ? 'high' : 'normal';
       const manifest = {
         run_id: runId,
         run_type: args.run_type || 'matrix_sweep',
         submitted_at: new Date().toISOString(),
+        workers,
+        priority,
       };
       fs.writeFileSync(
         path.join(REQUEST_DIR, `${runId}.request.json`),
         JSON.stringify(manifest, null, 2),
       );
 
-      log(`Trigger: submitted ${runId} (type=${manifest.run_type})`);
-      return ok({ run_id: runId, status: 'submitted', message: 'Request queued. Use swarm_poll_run to check progress.' });
+      log(`Trigger: submitted ${runId} (type=${manifest.run_type}, workers=${workers}, priority=${priority})`);
+      return ok({ run_id: runId, status: 'submitted', workers, priority, message: 'Request queued. Use swarm_poll_run to check progress.' });
     } catch (e) {
       return err(`Failed to submit run: ${(e as Error).message}`);
     }
@@ -317,6 +323,69 @@ server.tool(
       return ok({ run_id: args.run_id, status: 'cancel_requested', message: 'Cancel marker written. The host runner will stop the process shortly.' });
     } catch (e) {
       return err(`Failed to cancel run: ${(e as Error).message}`);
+    }
+  },
+);
+
+server.tool(
+  'swarm_trigger_autoresearch',
+  'Submit an autoresearch batch job that generates mutations from seed genomes, runs walk-forward validation on each variant in parallel, and classifies results as keepers or rejects. Returns a run_id for polling with swarm_poll_run. Use swarm_job_results to read the final keepers/rejects after completion.',
+  {
+    spec_json: z.string().describe('AutoresearchSpec JSON string. Required fields: seed_genomes (array of {genome, pair, timeframe, parent_sharpe}), mutations_per_genome (int), timerange (string). Optional: mutation_seed, allowed_families, max_mutations_per_variant, n_walkforward_windows, exchange, config_path, keeper_sharpe_threshold, parent_sharpe_gate, discard_hashes.'),
+    workers: z.number().optional().describe('Parallel worker count (1-8). Default 4. Use 4 for ≤10 variants, 6 for 10-20, 8 for 20+.'),
+    priority: z.string().optional().describe('Queue priority: "high" for interactive (jumps queue), "normal" for background. Default "normal".'),
+  },
+  async (args) => {
+    try {
+      // Validate JSON
+      const spec = JSON.parse(args.spec_json);
+
+      // Basic validation
+      if (!spec.seed_genomes || !Array.isArray(spec.seed_genomes) || spec.seed_genomes.length === 0) {
+        return err('spec_json must contain a non-empty seed_genomes array');
+      }
+      if (!spec.timerange) {
+        return err('spec_json must contain a timerange (e.g. "20250101-20260301")');
+      }
+
+      const runId = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      fs.mkdirSync(REQUEST_DIR, { recursive: true });
+
+      // Write spec file
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.spec.json`),
+        JSON.stringify(spec, null, 2),
+      );
+
+      // Write request manifest
+      const workers = Math.min(Math.max(args.workers || 4, 1), 8);
+      const priority = args.priority === 'high' ? 'high' : 'normal';
+      const totalVariants = spec.seed_genomes.length * (spec.mutations_per_genome || 7);
+      const manifest = {
+        run_id: runId,
+        run_type: 'autoresearch',
+        submitted_at: new Date().toISOString(),
+        workers,
+        priority,
+      };
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.request.json`),
+        JSON.stringify(manifest, null, 2),
+      );
+
+      log(`Autoresearch: submitted ${runId} (${spec.seed_genomes.length} seeds × ${spec.mutations_per_genome || 7} mutations = ~${totalVariants} variants, workers=${workers})`);
+      return ok({
+        run_id: runId,
+        status: 'submitted',
+        seeds: spec.seed_genomes.length,
+        mutations_per_genome: spec.mutations_per_genome || 7,
+        estimated_variants: totalVariants,
+        workers,
+        priority,
+        message: 'Autoresearch job queued. Use swarm_poll_run to check progress, swarm_job_results to read keepers/rejects when done.',
+      });
+    } catch (e) {
+      return err(`Failed to submit autoresearch: ${(e as Error).message}`);
     }
   },
 );

@@ -386,6 +386,14 @@ For Workflow G, I, or any multi-experiment run:
 - Batch exploration: skip hyperopt, just backtest + walk-forward
 - Autoresearch: 15 min per experiment, 5 experiments per run (unless user overrides)
 
+**Swarm usage rules:**
+- When a task involves more than 10 combinations (pairs × timeframes, or mutations to test), ALWAYS use `swarm_trigger_run` instead of sequential tool calls
+- workers=4 for small sweeps (≤50 combos), workers=6 for medium (50-100), workers=8 for large (100+)
+- priority="high" for interactive user requests, priority="normal" for scheduled/background research
+- While a swarm job is running: poll `swarm_poll_run` every 2 minutes, report progress to the user: "[N]/[total] complete, [running] active workers, ~[min] remaining"
+- When the job completes: immediately pull results with `swarm_job_results` and generate the full report
+- Never tell the user "the swarm runs tonight" or "wait for the nightly run" — the swarm is always available, trigger it immediately
+
 **Quality thresholds:**
 - Minimum viable: WF Sharpe > 0.5, drawdown < 25%, > 30 trades
 - Strong: WF Sharpe > 1.0, drawdown < 15%, profit factor > 1.5

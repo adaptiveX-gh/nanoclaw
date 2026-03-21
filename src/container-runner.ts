@@ -298,13 +298,10 @@ function buildContainerArgs(
     if (val) args.push('-e', `${key}=${val}`);
   }
 
-  // Forward Swarm settings from .env to container
-  const swarmKeys = ['SWARM_REPORT_DIR'];
-  const swarmEnv = readEnvFile(swarmKeys);
-  for (const key of swarmKeys) {
-    const val = process.env[key] || swarmEnv[key];
-    if (val) args.push('-e', `${key}=${val}`);
-  }
+  // Swarm: always use the container-side path (matches the bind mount).
+  // Do NOT forward host SWARM_REPORT_DIR — it may be a host-side absolute
+  // path or relative path that doesn't exist inside the container.
+  args.push('-e', 'SWARM_REPORT_DIR=/workspace/extra/swarm-reports');
 
   // Forward GitHub token for sdna publish
   const ghKeys = ['GITHUB_TOKEN'];

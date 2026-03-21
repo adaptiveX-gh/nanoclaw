@@ -50,7 +50,7 @@ function processRequest(requestFile: string): void {
 
   // Read request manifest
   const requestPath = path.join(REQUEST_DIR, requestFile);
-  let manifest: { run_id: string; run_type: string; submitted_at: string };
+  let manifest: { run_id: string; run_type: string; submitted_at: string; workers?: number; priority?: string };
   try {
     manifest = JSON.parse(fs.readFileSync(requestPath, 'utf-8'));
   } catch (e) {
@@ -95,21 +95,22 @@ function processRequest(requestFile: string): void {
   const reportDir = path.join(SWARM_REPORT_DIR, 'jobs', runId);
   fs.mkdirSync(reportDir, { recursive: true });
 
+  // Pass workers count as env var (default 4, capped at 8)
+  const workers = Math.min(manifest.workers || 4, 8);
+
+  // Route by run_type: autoresearch uses different CLI subcommand
+  const pythonArgs =
+    manifest.run_type === 'autoresearch'
+      ? ['-m', 'src', 'autoresearch', 'submit', '--spec', specPath, '--report-dir', reportDir]
+      : ['-m', 'src', 'job', 'submit', '--spec', specPath, '--report-dir', reportDir];
+
   const child = spawn(
     'python',
-    [
-      '-m',
-      'src',
-      'job',
-      'submit',
-      '--spec',
-      specPath,
-      '--report-dir',
-      reportDir,
-    ],
+    pythonArgs,
     {
       cwd: FREQTRADE_SWARM_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, MAX_CONCURRENT_BACKTESTS: String(workers) },
     },
   );
 
@@ -246,7 +247,29 @@ function pollRequests(): void {
       .readdirSync(REQUEST_DIR)
       .filter((f) => f.endsWith('.request.json'));
 
-    for (const file of files) {
+    // Sort by priority (high first) then by submission time
+    const sorted = files
+      .map((file) => {
+        try {
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(REQUEST_DIR, file), 'utf-8'),
+          );
+          return {
+            file,
+            priority: manifest.priority || 'normal',
+            submitted_at: manifest.submitted_at || '',
+          };
+        } catch {
+          return { file, priority: 'normal', submitted_at: '' };
+        }
+      })
+      .sort((a, b) => {
+        if (a.priority === 'high' && b.priority !== 'high') return -1;
+        if (b.priority === 'high' && a.priority !== 'high') return 1;
+        return a.submitted_at.localeCompare(b.submitted_at);
+      });
+
+    for (const { file } of sorted) {
       if (activeJobs.size >= MAX_CONCURRENT_SWARM_JOBS) break;
       processRequest(file);
     }
@@ -262,11 +285,33 @@ export function startSwarmRunner(): void {
     logger.debug('Swarm runner already running, skipping duplicate start');
     return;
   }
+
+  // Validate configuration before starting
+  if (!FREQTRADE_SWARM_DIR) {
+    logger.warn(
+      'FREQTRADE_SWARM_DIR not set — swarm runner disabled. Set it in .env to enable matrix sweeps.',
+    );
+    return;
+  }
+  if (!fs.existsSync(FREQTRADE_SWARM_DIR)) {
+    logger.warn(
+      { swarmDir: FREQTRADE_SWARM_DIR },
+      'FREQTRADE_SWARM_DIR does not exist — swarm runner disabled',
+    );
+    return;
+  }
+  if (!path.isAbsolute(SWARM_REPORT_DIR)) {
+    logger.warn(
+      { reportDir: SWARM_REPORT_DIR },
+      'SWARM_REPORT_DIR is a relative path — this may cause mount mismatches. Use an absolute path in .env.',
+    );
+  }
+
   running = true;
 
   fs.mkdirSync(REQUEST_DIR, { recursive: true });
   logger.info(
-    { requestDir: REQUEST_DIR, swarmDir: FREQTRADE_SWARM_DIR || '(not set)' },
+    { requestDir: REQUEST_DIR, swarmDir: FREQTRADE_SWARM_DIR, workers: 'env-passthrough' },
     'Swarm request runner started',
   );
 
