@@ -228,6 +228,7 @@ server.tool(
         submitted_at: new Date().toISOString(),
         workers,
         priority,
+        group_folder: process.env.GROUP_FOLDER || '',
       };
       fs.writeFileSync(
         path.join(REQUEST_DIR, `${runId}.request.json`),
@@ -367,6 +368,7 @@ server.tool(
         submitted_at: new Date().toISOString(),
         workers,
         priority,
+        group_folder: process.env.GROUP_FOLDER || '',
       };
       fs.writeFileSync(
         path.join(REQUEST_DIR, `${runId}.request.json`),

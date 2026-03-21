@@ -269,6 +269,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  groupFolder: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -302,6 +303,11 @@ function buildContainerArgs(
   // Do NOT forward host SWARM_REPORT_DIR — it may be a host-side absolute
   // path or relative path that doesn't exist inside the container.
   args.push('-e', 'SWARM_REPORT_DIR=/workspace/extra/swarm-reports');
+
+  // Forward group folder name so container agents can embed it in swarm
+  // request manifests. The host-side swarm runner uses this to locate
+  // strategy files in data/sessions/<group>/freqtrade-user-data/strategies/.
+  args.push('-e', `GROUP_FOLDER=${groupFolder}`);
 
   // Forward GitHub token for sdna publish
   const ghKeys = ['GITHUB_TOKEN'];
@@ -368,7 +374,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, group.folder);
 
   logger.debug(
     {

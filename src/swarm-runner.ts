@@ -40,6 +40,100 @@ function writeStatus(runId: string, status: Record<string, unknown>): void {
   fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
 }
 
+/**
+ * Copy strategy .py files from the group's freqtrade-user-data into the
+ * swarm's strategies directory so freqtrade-swarm can find them.
+ * Extracts strategy names from the spec JSON and copies only those files.
+ */
+function copyGroupStrategiesToSwarm(
+  groupFolder: string,
+  specPath: string,
+): void {
+  const swarmStrategiesDir = path.join(
+    FREQTRADE_SWARM_DIR,
+    'data',
+    'user_data',
+    'strategies',
+  );
+  fs.mkdirSync(swarmStrategiesDir, { recursive: true });
+
+  const srcDir = path.join(
+    DATA_DIR,
+    'sessions',
+    groupFolder,
+    'freqtrade-user-data',
+    'strategies',
+  );
+  if (!fs.existsSync(srcDir)) {
+    logger.warn(
+      { srcDir },
+      'Group strategies dir not found — swarm may not locate strategy',
+    );
+    return;
+  }
+
+  // Extract strategy names from the spec
+  let spec: Record<string, unknown>;
+  try {
+    spec = JSON.parse(fs.readFileSync(specPath, 'utf-8'));
+  } catch {
+    logger.warn({ specPath }, 'Could not parse spec for strategy copy');
+    return;
+  }
+
+  const names = new Set<string>();
+
+  // Matrix sweep: spec.genome.identity.name or spec.strategy_name
+  const genome = spec.genome as Record<string, unknown> | undefined;
+  if (genome?.identity) {
+    const identity = genome.identity as Record<string, unknown>;
+    if (identity.name) names.add(String(identity.name));
+  }
+  if (spec.strategy_name) names.add(String(spec.strategy_name));
+
+  // Autoresearch: spec.seed_genomes[].genome.identity.name
+  if (Array.isArray(spec.seed_genomes)) {
+    for (const sg of spec.seed_genomes as Record<string, unknown>[]) {
+      const sgGenome = sg.genome as Record<string, unknown> | undefined;
+      if (sgGenome?.identity) {
+        const identity = sgGenome.identity as Record<string, unknown>;
+        if (identity.name) names.add(String(identity.name));
+      }
+    }
+  }
+
+  if (names.size === 0) {
+    // Fallback: copy ALL .py files from the group's strategies dir
+    logger.info(
+      { srcDir },
+      'No strategy names found in spec — copying all .py files',
+    );
+    for (const file of fs.readdirSync(srcDir)) {
+      if (file.endsWith('.py')) {
+        fs.copyFileSync(
+          path.join(srcDir, file),
+          path.join(swarmStrategiesDir, file),
+        );
+      }
+    }
+    return;
+  }
+
+  for (const name of names) {
+    const src = path.join(srcDir, `${name}.py`);
+    if (fs.existsSync(src)) {
+      const dst = path.join(swarmStrategiesDir, `${name}.py`);
+      fs.copyFileSync(src, dst);
+      logger.info({ name, dst }, 'Copied strategy to swarm strategies dir');
+    } else {
+      logger.warn(
+        { name, src },
+        'Strategy .py not found in group strategies dir',
+      );
+    }
+  }
+}
+
 function processRequest(requestFile: string): void {
   const runId = path.basename(requestFile, '.request.json');
 
@@ -56,6 +150,7 @@ function processRequest(requestFile: string): void {
     submitted_at: string;
     workers?: number;
     priority?: string;
+    group_folder?: string;
   };
   try {
     manifest = JSON.parse(fs.readFileSync(requestPath, 'utf-8'));
@@ -96,6 +191,11 @@ function processRequest(requestFile: string): void {
     started_at: startedAt,
     pid: null, // filled after spawn
   });
+
+  // Copy strategy files from the group's container storage into the swarm dir
+  if (manifest.group_folder) {
+    copyGroupStrategiesToSwarm(manifest.group_folder, specPath);
+  }
 
   // Spawn the freqtrade-swarm process
   const reportDir = path.join(SWARM_REPORT_DIR, 'jobs', runId);
