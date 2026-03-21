@@ -92,7 +92,14 @@
       "Bash(pip install freqtrade --dry-run)",
       "Bash(xargs cat)",
       "Bash(npx vitest run src/container-runner.test.ts)",
-      "Bash(npx vitest run)"
+      "Bash(npx vitest run)",
+      "Bash(node --test cli/test/)",
+      "Bash(node --test cli/test/build.test.js)",
+      "Bash(docker ps --filter \"name=nanoclaw\" --format \"{{.Names}} {{.Status}}\")",
+      "Bash(netstat -ano)",
+      "Read(//d/Users/scale/Code/nanoclaw/**)",
+      "Bash(docker info)",
+      "Bash(taskkill //PID 219364 //F)"
     ]
   }
 }

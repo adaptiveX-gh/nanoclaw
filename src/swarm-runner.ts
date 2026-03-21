@@ -50,7 +50,13 @@ function processRequest(requestFile: string): void {
 
   // Read request manifest
   const requestPath = path.join(REQUEST_DIR, requestFile);
-  let manifest: { run_id: string; run_type: string; submitted_at: string; workers?: number; priority?: string };
+  let manifest: {
+    run_id: string;
+    run_type: string;
+    submitted_at: string;
+    workers?: number;
+    priority?: string;
+  };
   try {
     manifest = JSON.parse(fs.readFileSync(requestPath, 'utf-8'));
   } catch (e) {
@@ -101,18 +107,32 @@ function processRequest(requestFile: string): void {
   // Route by run_type: autoresearch uses different CLI subcommand
   const pythonArgs =
     manifest.run_type === 'autoresearch'
-      ? ['-m', 'src', 'autoresearch', 'submit', '--spec', specPath, '--report-dir', reportDir]
-      : ['-m', 'src', 'job', 'submit', '--spec', specPath, '--report-dir', reportDir];
+      ? [
+          '-m',
+          'src',
+          'autoresearch',
+          'submit',
+          '--spec',
+          specPath,
+          '--report-dir',
+          reportDir,
+        ]
+      : [
+          '-m',
+          'src',
+          'job',
+          'submit',
+          '--spec',
+          specPath,
+          '--report-dir',
+          reportDir,
+        ];
 
-  const child = spawn(
-    'python',
-    pythonArgs,
-    {
-      cwd: FREQTRADE_SWARM_DIR,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, MAX_CONCURRENT_BACKTESTS: String(workers) },
-    },
-  );
+  const child = spawn('python', pythonArgs, {
+    cwd: FREQTRADE_SWARM_DIR,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, MAX_CONCURRENT_BACKTESTS: String(workers) },
+  });
 
   const job: RunningJob = { runId, process: child, startedAt };
   activeJobs.set(runId, job);
@@ -311,7 +331,11 @@ export function startSwarmRunner(): void {
 
   fs.mkdirSync(REQUEST_DIR, { recursive: true });
   logger.info(
-    { requestDir: REQUEST_DIR, swarmDir: FREQTRADE_SWARM_DIR, workers: 'env-passthrough' },
+    {
+      requestDir: REQUEST_DIR,
+      swarmDir: FREQTRADE_SWARM_DIR,
+      workers: 'env-passthrough',
+    },
     'Swarm request runner started',
   );
 
