@@ -146,10 +146,7 @@ function copyGroupStrategiesToSwarm(
  * backtest-only config from the spec's exchange settings.
  * Returns the swarm-local config path (relative to FREQTRADE_SWARM_DIR).
  */
-function ensureSwarmConfig(
-  groupFolder: string,
-  specPath: string,
-): string {
+function ensureSwarmConfig(groupFolder: string, specPath: string): string {
   const swarmConfigDir = path.join(FREQTRADE_SWARM_DIR, 'data', 'user_data');
   const swarmConfigPath = path.join(swarmConfigDir, 'config.json');
 
@@ -310,7 +307,11 @@ function processRequest(requestFile: string): void {
   if (manifest.group_folder) {
     copyGroupStrategiesToSwarm(manifest.group_folder, specPath);
     const swarmConfigPath = ensureSwarmConfig(manifest.group_folder, specPath);
-    effectiveSpecPath = rewriteSpecConfigPath(specPath, reportDir, swarmConfigPath);
+    effectiveSpecPath = rewriteSpecConfigPath(
+      specPath,
+      reportDir,
+      swarmConfigPath,
+    );
   }
 
   // Pass workers count as env var (default 4, capped at 8)
