@@ -251,7 +251,7 @@ server.tool(
         n_walkforward_windows: 1,
         skip_hyperopt: true,
         exchange: 'binance',
-        strategy_path: 'user_data/strategies/BbandsRsiAdx.py',
+        strategy_path: 'data/user_data/strategies/BbandsRsiAdx.py',
       };
 
       fs.writeFileSync(
