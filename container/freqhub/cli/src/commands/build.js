@@ -5,9 +5,11 @@ import { computeHash, displayHash, verifyHash } from '../lib/hash.js';
 import { buildDAG, getEdges, computeFrontier, getDepths } from '../lib/dag.js';
 
 /**
- * Quality tier based on walk-forward Sharpe ratio.
+ * Quality tier — prefer Aphex tier, fall back to Sharpe-based.
  */
-function qualityTier(sharpe) {
+function qualityTier(attestation) {
+  if (attestation?.aphex_tier) return attestation.aphex_tier;
+  const sharpe = attestation?.walk_forward_sharpe;
   if (sharpe == null) return 'experimental';
   if (sharpe >= 1.5) return 'exceptional';
   if (sharpe >= 1.0) return 'strong';
@@ -72,7 +74,7 @@ export function buildRegistry(contentDir, outputDir = 'dist') {
         .replace(/\.sdna$/, '')
         .replace(/\//g, '/');
 
-      const sharpe = frontmatter.attestation?.walk_forward_sharpe;
+      const att = frontmatter.attestation || { status: 'unattested' };
 
       genomes.push({
         id,
@@ -87,8 +89,8 @@ export function buildRegistry(contentDir, outputDir = 'dist') {
         created: frontmatter.created || '',
         runtime: frontmatter.runtime || 'freqtrade',
         sdna_version: frontmatter.sdna_version || '0.1',
-        attestation: frontmatter.attestation || { status: 'unattested' },
-        tier: qualityTier(sharpe),
+        attestation: att,
+        tier: qualityTier(att),
         path: relPath,
         hashValid,
         // Body fields useful for search
@@ -106,20 +108,27 @@ export function buildRegistry(contentDir, outputDir = 'dist') {
   const depths = getDepths(genomes, dag.parents);
   const frontier = computeFrontier(genomes, dag.leaves);
 
-  // Build leaderboard sorted by walk-forward Sharpe
+  // Build leaderboard sorted by Aphex score (fallback to Sharpe)
   const leaderboard = genomes
-    .filter(g => g.attestation?.walk_forward_sharpe != null)
-    .sort((a, b) =>
-      (b.attestation.walk_forward_sharpe || 0) -
-      (a.attestation.walk_forward_sharpe || 0)
-    )
+    .filter(g => g.attestation?.status === 'attested')
+    .sort((a, b) => {
+      const aScore = a.attestation.aphex_score ?? (a.attestation.walk_forward_sharpe || 0);
+      const bScore = b.attestation.aphex_score ?? (b.attestation.walk_forward_sharpe || 0);
+      return bScore - aScore;
+    })
     .map((g, rank) => ({
       rank: rank + 1,
       id: g.id,
       name: g.name,
       hash: g.hash,
-      sharpe: g.attestation.walk_forward_sharpe,
-      tier: g.tier,
+      aphex_score: g.attestation.aphex_score || 0,
+      aphex_tier: g.attestation.aphex_tier || g.tier,
+      aphex_components: g.attestation.aphex_components || null,
+      sharpe: g.attestation.walk_forward_sharpe || 0,
+      trades: g.attestation.total_trades || 0,
+      profit_factor: g.attestation.profit_factor || 0,
+      max_drawdown: g.attestation.max_drawdown || 0,
+      win_rate: g.attestation.win_rate || 0,
       operator: g.operator,
       tags: g.tags,
     }));

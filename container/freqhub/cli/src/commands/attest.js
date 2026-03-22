@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { parse, serialize } from '../lib/frontmatter.js';
 import { computeHash, displayHash } from '../lib/hash.js';
+import { computeAphexScore } from '../lib/aphex.js';
 
 /**
  * Create or update attestation for a genome.
@@ -22,6 +23,12 @@ export function attestGenome(sourcePath, attestationData) {
     attested_at: new Date().toISOString(),
     ...attestationData,
   };
+
+  // Compute Aphex score (stored in frontmatter, outside hash chain)
+  const aphex = computeAphexScore(frontmatter.attestation, JSON.parse(body));
+  frontmatter.attestation.aphex_score = aphex.aphex_score;
+  frontmatter.attestation.aphex_tier = aphex.tier;
+  frontmatter.attestation.aphex_components = aphex.components;
 
   const content = serialize(frontmatter, body);
   fs.writeFileSync(sourcePath, content);
