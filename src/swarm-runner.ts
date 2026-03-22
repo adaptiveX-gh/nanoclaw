@@ -365,21 +365,36 @@ function processRequest(requestFile: string): void {
   let pythonArgs: string[];
   if (manifest.run_type === 'autoresearch') {
     pythonArgs = [
-      '-m', 'src', 'autoresearch', 'submit',
-      '--spec', effectiveSpecPath,
-      '--report-dir', reportDir,
+      '-m',
+      'src',
+      'autoresearch',
+      'submit',
+      '--spec',
+      effectiveSpecPath,
+      '--report-dir',
+      reportDir,
     ];
   } else if (manifest.run_type === 'batch_backtest') {
     pythonArgs = [
-      '-m', 'src', 'batch', 'submit',
-      '--spec', effectiveSpecPath,
-      '--report-dir', reportDir,
+      '-m',
+      'src',
+      'batch',
+      'submit',
+      '--spec',
+      effectiveSpecPath,
+      '--report-dir',
+      reportDir,
     ];
   } else {
     pythonArgs = [
-      '-m', 'src', 'job', 'submit',
-      '--spec', effectiveSpecPath,
-      '--report-dir', reportDir,
+      '-m',
+      'src',
+      'job',
+      'submit',
+      '--spec',
+      effectiveSpecPath,
+      '--report-dir',
+      reportDir,
     ];
   }
 
