@@ -247,7 +247,7 @@ server.tool(
         },
         pairs: ['BTC/USDT:USDT'],
         timeframes: ['1h'],
-        timerange: '',
+        timerange: '20250901-20260301',
         n_walkforward_windows: 1,
         skip_hyperopt: true,
         exchange: 'binance',
