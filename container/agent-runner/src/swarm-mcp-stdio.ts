@@ -142,7 +142,7 @@ server.tool(
 
 server.tool(
   'swarm_health',
-  'Check if the swarm report directory is configured and contains recent data. Useful for diagnosing integration issues.',
+  'Check swarm health: report directory, recent data freshness, and last 5 triggered job outcomes. Returns swarm_likely_broken=true if the last 3 jobs all failed (infrastructure may need restart). Use before triggering new jobs.',
   {},
   async () => {
     try {
@@ -182,9 +182,45 @@ server.tool(
         } else {
           health.total_archived_runs = 0;
         }
+
+        // Scan recent triggered job statuses for failure pattern detection
+        const requestDir = path.join(REPORT_DIR, 'requests');
+        if (fs.existsSync(requestDir)) {
+          const statusFiles = fs.readdirSync(requestDir)
+            .filter(f => f.endsWith('.status.json'))
+            .sort().reverse()   // newest first (timestamp in run_id)
+            .slice(0, 5);
+
+          const recentJobs = statusFiles.map(f => {
+            try {
+              const data = JSON.parse(fs.readFileSync(path.join(requestDir, f), 'utf-8'));
+              return {
+                run_id: data.run_id || f.replace('.status.json', ''),
+                status: data.status,
+                finished_at: data.finished_at,
+                exit_code: data.exit_code,
+                error: data.error?.slice(0, 200),
+                common_error: data.common_error,
+              };
+            } catch {
+              return { run_id: f.replace('.status.json', ''), status: 'unknown' };
+            }
+          });
+
+          health.recent_jobs = recentJobs;
+          const recentFailures = recentJobs.filter(j => j.status === 'failed').length;
+          health.consecutive_failures = recentFailures;
+          // All recent jobs failed → swarm may be broken
+          health.swarm_likely_broken = recentJobs.length >= 3
+            && recentJobs.slice(0, 3).every(j => j.status === 'failed');
+        } else {
+          health.recent_jobs = [];
+          health.consecutive_failures = 0;
+          health.swarm_likely_broken = false;
+        }
       }
 
-      log(`Health check: exists=${health.exists}, fresh=${health.last_status_fresh}`);
+      log(`Health check: exists=${health.exists}, fresh=${health.last_status_fresh}, likely_broken=${health.swarm_likely_broken}`);
       return ok(health);
     } catch (e) {
       return err(`Health check failed: ${(e as Error).message}`);
@@ -195,6 +231,57 @@ server.tool(
 // ─── Trigger Tools ──────────────────────────────────────────────────
 
 const REQUEST_DIR = path.join(REPORT_DIR, 'requests');
+
+server.tool(
+  'swarm_selftest',
+  'Run a minimal smoke test (BTC/USDT:USDT, 1h, 1 WF window, SampleStrategy) to verify the swarm pipeline works end-to-end. Returns a run_id — poll with swarm_poll_run. Takes ~2-3 minutes. Use when swarm_health shows swarm_likely_broken=true.',
+  {},
+  async () => {
+    try {
+      const runId = `selftest_${Date.now()}`;
+      fs.mkdirSync(REQUEST_DIR, { recursive: true });
+
+      const spec = {
+        genome: {
+          identity: { name: 'SelfTest_SampleStrategy', version: '1.0' },
+          strategy: { class_name: 'SampleStrategy' },
+          risk: {},
+        },
+        pairs: ['BTC/USDT:USDT'],
+        timeframes: ['1h'],
+        timerange: '',
+        n_walkforward_windows: 1,
+        skip_hyperopt: true,
+        exchange: 'binance',
+      };
+
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.spec.json`),
+        JSON.stringify(spec, null, 2),
+      );
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.request.json`),
+        JSON.stringify({
+          run_id: runId,
+          run_type: 'selftest',
+          submitted_at: new Date().toISOString(),
+          workers: 1,
+          priority: 'high',
+          group_folder: process.env.GROUP_FOLDER || '',
+        }, null, 2),
+      );
+
+      log(`Self-test submitted: ${runId}`);
+      return ok({
+        run_id: runId,
+        status: 'submitted',
+        message: 'Self-test submitted. Poll with swarm_poll_run. Expected ~2-3 min.',
+      });
+    } catch (e) {
+      return err(`Failed to submit self-test: ${(e as Error).message}`);
+    }
+  },
+);
 
 server.tool(
   'swarm_trigger_run',
@@ -245,7 +332,7 @@ server.tool(
 
 server.tool(
   'swarm_poll_run',
-  'Check the status of a submitted swarm run by its run_id. Returns status (queued/running/completed/failed), exit code, and timestamps. For completed jobs, includes report_dir path — use swarm_job_results to read full results.',
+  'Check the status of a submitted swarm run by its run_id. Returns status (queued/running/completed/failed), exit code, timestamps, and common_error (if most tasks failed with the same root cause). For completed jobs, includes report_dir path — use swarm_job_results to read full results.',
   {
     run_id: z.string().describe('Run ID returned by swarm_trigger_run'),
   },

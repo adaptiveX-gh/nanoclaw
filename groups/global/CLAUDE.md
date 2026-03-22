@@ -406,6 +406,32 @@ For Workflow G, I, or any multi-experiment run:
 - When the job completes: immediately pull results with `swarm_job_results` and generate the full report
 - Never tell the user "the swarm runs tonight" or "wait for the nightly run" — the swarm is always available, trigger it immediately
 
+**Mandatory checks before ANY swarm trigger:**
+
+Check 0 — Swarm health:
+- Call `swarm_health` to verify the runner is alive and recent jobs succeeded
+- If `swarm_likely_broken` is true (last 3 jobs ALL failed):
+  → Run `swarm_selftest` and poll until complete (~2-3 min)
+  → If selftest passes: swarm is healthy, previous failures were job-specific, proceed
+  → If selftest fails: STOP. Report to user: "Swarm infrastructure is broken (last 3 jobs + selftest all failed). Needs restart before we can proceed."
+  → Do NOT trigger new jobs on a broken swarm
+- If mixed results or no recent failures: proceed to Check 1
+
+Check 1 — Strategy deployed:
+- Strategy file must exist at `/freqtrade/user_data/strategies/<ClassName>.py` — use `strategy_list`
+- If using a /drop file: compile first with `sdna compile`, verify .py output in /strategies
+
+Check 2 — Pairs valid:
+- All pairs exist on the exchange — use `show_available_pairs` to verify
+
+Check 3 — Config exists:
+- If spec references a config file, verify it exists with `ls`
+
+Check 4 — Genome complete:
+- `identity.name` field populated (pydantic rejects otherwise)
+
+If ANY check fails, fix it BEFORE triggering. Do NOT submit and hope.
+
 **Quality thresholds:**
 - Minimum viable: WF Sharpe > 0.5, drawdown < 25%, > 30 trades
 - Strong: WF Sharpe > 1.0, drawdown < 15%, profit factor > 1.5
@@ -441,6 +467,10 @@ For Workflow G, I, or any multi-experiment run:
 - FreqHub `sdna search` returns nothing → broaden query, remove filters, try `sdna leaderboard`
 - FreqHub `sdna get` fails → check ID exists (`sdna search`), check network connectivity
 - Genome hash mismatch → hash is body-only (SHA-256 of JSON body); frontmatter changes don't affect hash
+- Swarm `swarm_health` shows `swarm_likely_broken` → run `swarm_selftest`, report to user if broken
+- Swarm run fails with 0/N backtests → read `common_error` from `swarm_poll_run` — it explains root cause (e.g., "strategy file not found", "insufficient data for pair")
+- Swarm preflight fails → fix the reported issue (missing strategy, bad pair names), then re-trigger
+- Swarm returns exit code 1 → total failure, read error from status
 
 ## Communication
 
