@@ -296,6 +296,30 @@ server.tool(
       // Validate JSON
       const spec = JSON.parse(args.spec_json);
 
+      // Structural validation — catch bad specs before writing to disk
+      const validationErrors: string[] = [];
+      if (!spec.genome || typeof spec.genome !== 'object') {
+        validationErrors.push('Missing "genome" object');
+      } else if (!spec.genome.identity || typeof spec.genome.identity !== 'object') {
+        validationErrors.push('Missing "genome.identity" object');
+      } else {
+        if (!spec.genome.identity.name || typeof spec.genome.identity.name !== 'string') {
+          validationErrors.push('Missing or empty "genome.identity.name"');
+        }
+        if (!spec.genome.identity.genome_id || typeof spec.genome.identity.genome_id !== 'string') {
+          validationErrors.push('Missing or empty "genome.identity.genome_id"');
+        }
+      }
+      if (!Array.isArray(spec.pairs) || spec.pairs.length === 0) {
+        validationErrors.push('Missing or empty "pairs" array');
+      }
+      if (!Array.isArray(spec.timeframes) || spec.timeframes.length === 0) {
+        validationErrors.push('Missing or empty "timeframes" array');
+      }
+      if (validationErrors.length > 0) {
+        return err(`Invalid sweep spec: ${validationErrors.join('; ')}. Fix the spec and resubmit.`);
+      }
+
       const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       fs.mkdirSync(REQUEST_DIR, { recursive: true });
 
@@ -433,6 +457,23 @@ server.tool(
       }
       if (!spec.timerange) {
         return err('spec_json must contain a timerange (e.g. "20250101-20260301")');
+      }
+
+      // Validate each seed genome has required structure
+      for (let i = 0; i < spec.seed_genomes.length; i++) {
+        const sg = spec.seed_genomes[i];
+        if (!sg.genome || typeof sg.genome !== 'object') {
+          return err(`seed_genomes[${i}]: missing "genome" object`);
+        }
+        if (!sg.genome.identity?.name) {
+          return err(`seed_genomes[${i}]: missing "genome.identity.name"`);
+        }
+        if (!sg.pair || typeof sg.pair !== 'string') {
+          return err(`seed_genomes[${i}]: missing "pair" (string)`);
+        }
+        if (!sg.timeframe || typeof sg.timeframe !== 'string') {
+          return err(`seed_genomes[${i}]: missing "timeframe" (string)`);
+        }
       }
 
       const runId = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

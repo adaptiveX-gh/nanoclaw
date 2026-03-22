@@ -401,6 +401,27 @@ function processRequest(requestFile: string): void {
       }
     }
 
+    // On failure: extract common_error and validation_error from Python-side output
+    let commonError: string | undefined;
+    let validationError: boolean | undefined;
+    if (!succeeded) {
+      try {
+        const resultsPath = path.join(reportDir, 'latest', 'results.json');
+        if (fs.existsSync(resultsPath)) {
+          const results = JSON.parse(fs.readFileSync(resultsPath, 'utf-8'));
+          commonError = results.common_error;
+        }
+        const pyStatusPath = path.join(reportDir, 'latest', 'status.json');
+        if (fs.existsSync(pyStatusPath)) {
+          const pyStatus = JSON.parse(fs.readFileSync(pyStatusPath, 'utf-8'));
+          if (!commonError) commonError = pyStatus.common_error || pyStatus.error;
+          validationError = pyStatus.validation_error;
+        }
+      } catch {
+        // Non-critical — status still written without enrichment
+      }
+    }
+
     writeStatus(runId, {
       run_id: runId,
       status: succeeded ? 'completed' : 'failed',
@@ -411,6 +432,8 @@ function processRequest(requestFile: string): void {
       report_dir: reportDir,
       ...(summary ? { summary } : {}),
       ...(stderr && !succeeded ? { error: stderr.slice(0, 2000) } : {}),
+      ...(commonError ? { common_error: commonError } : {}),
+      ...(validationError ? { validation_error: true } : {}),
     });
 
     if (succeeded) {
