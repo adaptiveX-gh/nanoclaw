@@ -267,6 +267,7 @@ server.tool(
           workers: 1,
           priority: 'high',
           group_folder: process.env.GROUP_FOLDER || '',
+          chat_jid: process.env.NANOCLAW_CHAT_JID || '',
         }, null, 2),
       );
 
@@ -339,6 +340,7 @@ server.tool(
         workers,
         priority,
         group_folder: process.env.GROUP_FOLDER || '',
+        chat_jid: process.env.NANOCLAW_CHAT_JID || '',
       };
       fs.writeFileSync(
         path.join(REQUEST_DIR, `${runId}.request.json`),
@@ -346,7 +348,7 @@ server.tool(
       );
 
       log(`Trigger: submitted ${runId} (type=${manifest.run_type}, workers=${workers}, priority=${priority})`);
-      return ok({ run_id: runId, status: 'submitted', workers, priority, message: 'Request queued. Use swarm_poll_run to check progress.' });
+      return ok({ run_id: runId, status: 'submitted', workers, priority, message: 'Request queued. You\'ll be notified when it completes.' });
     } catch (e) {
       return err(`Failed to submit run: ${(e as Error).message}`);
     }
@@ -496,6 +498,7 @@ server.tool(
         workers,
         priority,
         group_folder: process.env.GROUP_FOLDER || '',
+        chat_jid: process.env.NANOCLAW_CHAT_JID || '',
       };
       fs.writeFileSync(
         path.join(REQUEST_DIR, `${runId}.request.json`),

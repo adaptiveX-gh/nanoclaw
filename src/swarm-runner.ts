@@ -31,14 +31,47 @@ const SWARM_REPORT_DIR =
 const REQUEST_DIR = path.join(SWARM_REPORT_DIR, 'requests');
 const FREQSWARM_DIR = process.env.FREQSWARM_DIR || swarmEnv.FREQSWARM_DIR || '';
 
+export interface SwarmRunnerDeps {
+  sendMessage: (jid: string, text: string) => Promise<void>;
+  registeredGroups: () => Record<string, { folder: string; name: string }>;
+}
+
 interface RunningJob {
   runId: string;
   process: ChildProcess;
   startedAt: string;
+  chatJid?: string;
+  runType?: string;
 }
 
 const activeJobs = new Map<string, RunningJob>();
 let running = false;
+let deps: SwarmRunnerDeps | undefined;
+
+/** Max job duration before watchdog kills it (2 hours) */
+const MAX_JOB_DURATION_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Resolve the chatJid for a job from the manifest's chat_jid field,
+ * falling back to scanning registeredGroups by group_folder.
+ */
+function resolveJobChatJid(manifest: { chat_jid?: string; group_folder?: string }): string | undefined {
+  if (manifest.chat_jid) return manifest.chat_jid;
+  if (!deps || !manifest.group_folder) return undefined;
+  const groups = deps.registeredGroups();
+  const entry = Object.entries(groups).find(([, g]) => g.folder === manifest.group_folder);
+  return entry?.[0];
+}
+
+/**
+ * Send a notification message to the user who submitted a swarm job.
+ */
+function notifyUser(chatJid: string | undefined, text: string): void {
+  if (!chatJid || !deps) return;
+  deps.sendMessage(chatJid, text).catch((err) =>
+    logger.error({ err, chatJid }, 'Failed to send swarm job notification'),
+  );
+}
 
 function writeStatus(runId: string, status: Record<string, unknown>): void {
   const statusPath = path.join(REQUEST_DIR, `${runId}.status.json`);
@@ -256,6 +289,7 @@ function processRequest(requestFile: string): void {
     workers?: number;
     priority?: string;
     group_folder?: string;
+    chat_jid?: string;
   };
   try {
     manifest = JSON.parse(fs.readFileSync(requestPath, 'utf-8'));
@@ -343,7 +377,8 @@ function processRequest(requestFile: string): void {
     env: { ...process.env, MAX_CONCURRENT_BACKTESTS: String(workers) },
   });
 
-  const job: RunningJob = { runId, process: child, startedAt };
+  const chatJid = resolveJobChatJid(manifest as { chat_jid?: string; group_folder?: string });
+  const job: RunningJob = { runId, process: child, startedAt, chatJid, runType: manifest.run_type };
   activeJobs.set(runId, job);
 
   // Update status with PID
@@ -438,10 +473,20 @@ function processRequest(requestFile: string): void {
         { runId, code, ...(stderr ? { stderr: stderr.slice(0, 500) } : {}) },
         'Swarm job completed',
       );
+      const topCombo = summary?.top_combo ? `\nTop: ${summary.top_combo}` : '';
+      notifyUser(
+        job.chatJid,
+        `Swarm job \`${runId}\` completed (${manifest.run_type || 'unknown'}).${topCombo}`,
+      );
     } else {
       logger.error(
         { runId, code, stderr: stderr.slice(0, 500) },
         'Swarm job failed',
+      );
+      const reason = commonError || stderr.slice(0, 300) || `exit code ${code}`;
+      notifyUser(
+        job.chatJid,
+        `Swarm job \`${runId}\` failed (${manifest.run_type || 'unknown'}).\nReason: ${reason}`,
       );
     }
   });
@@ -456,6 +501,7 @@ function processRequest(requestFile: string): void {
       error: `Spawn error: ${err.message}`,
     });
     logger.error({ runId, err }, 'Failed to spawn swarm process');
+    notifyUser(chatJid, `Swarm job \`${runId}\` failed to start: ${err.message}`);
   });
 }
 
@@ -472,12 +518,42 @@ function checkCancellations(): void {
         started_at: job.startedAt,
         finished_at: new Date().toISOString(),
       });
+      notifyUser(job.chatJid, `Swarm job \`${runId}\` cancelled.`);
       // Clean up cancel marker
       try {
         fs.unlinkSync(cancelPath);
       } catch {
         // ignore
       }
+    }
+  }
+}
+
+/**
+ * Watchdog: kill jobs that exceed MAX_JOB_DURATION_MS.
+ * Prevents zombie jobs from running forever without feedback.
+ */
+function checkJobTimeouts(): void {
+  const now = Date.now();
+  for (const [runId, job] of activeJobs) {
+    const elapsed = now - new Date(job.startedAt).getTime();
+    if (elapsed > MAX_JOB_DURATION_MS) {
+      const durationMin = Math.round(elapsed / 60000);
+      logger.warn({ runId, pid: job.process.pid, durationMin }, 'Swarm job exceeded max duration, killing');
+      job.process.kill('SIGTERM');
+      activeJobs.delete(runId);
+      writeStatus(runId, {
+        run_id: runId,
+        status: 'failed',
+        run_type: job.runType,
+        started_at: job.startedAt,
+        finished_at: new Date().toISOString(),
+        error: `Job killed by watchdog after ${durationMin} minutes (max ${MAX_JOB_DURATION_MS / 60000} min)`,
+      });
+      notifyUser(
+        job.chatJid,
+        `Swarm job \`${runId}\` killed by watchdog — ran for ${durationMin} min without completing. This usually means the process is stuck.`,
+      );
     }
   }
 }
@@ -490,8 +566,9 @@ function pollRequests(): void {
       fs.mkdirSync(REQUEST_DIR, { recursive: true });
     }
 
-    // Check for cancellations first
+    // Check for cancellations and timeouts first
     checkCancellations();
+    checkJobTimeouts();
 
     // Look for new requests (respect concurrency limit)
     if (activeJobs.size >= MAX_CONCURRENT_SWARM_JOBS) {
@@ -536,11 +613,12 @@ function pollRequests(): void {
   setTimeout(pollRequests, POLL_MS);
 }
 
-export function startSwarmRunner(): void {
+export function startSwarmRunner(runnerDeps?: SwarmRunnerDeps): void {
   if (running) {
     logger.debug('Swarm runner already running, skipping duplicate start');
     return;
   }
+  deps = runnerDeps;
 
   // Validate configuration before starting
   if (!FREQSWARM_DIR) {

@@ -634,7 +634,18 @@ async function main(): Promise<void> {
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
   });
-  startSwarmRunner();
+  startSwarmRunner({
+    sendMessage: async (jid, rawText) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'Swarm notification: no channel owns JID');
+        return;
+      }
+      const text = formatOutbound(rawText);
+      if (text) await channel.sendMessage(jid, text);
+    },
+    registeredGroups: () => registeredGroups,
+  });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
