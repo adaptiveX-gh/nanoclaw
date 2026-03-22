@@ -29,8 +29,7 @@ const SWARM_REPORT_DIR =
   swarmEnv.SWARM_REPORT_DIR ||
   path.join(DATA_DIR, 'swarm-reports');
 const REQUEST_DIR = path.join(SWARM_REPORT_DIR, 'requests');
-const FREQSWARM_DIR =
-  process.env.FREQSWARM_DIR || swarmEnv.FREQSWARM_DIR || '';
+const FREQSWARM_DIR = process.env.FREQSWARM_DIR || swarmEnv.FREQSWARM_DIR || '';
 
 interface RunningJob {
   runId: string;
@@ -273,10 +272,7 @@ function processRequest(requestFile: string): void {
   }
 
   if (!FREQSWARM_DIR) {
-    logger.error(
-      { runId },
-      'FREQSWARM_DIR not set — cannot run swarm jobs',
-    );
+    logger.error({ runId }, 'FREQSWARM_DIR not set — cannot run swarm jobs');
     writeStatus(runId, {
       run_id: runId,
       status: 'failed',

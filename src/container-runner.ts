@@ -292,7 +292,11 @@ function buildContainerArgs(
   }
 
   // Forward aphexDATA settings from .env to container
-  const aphexdataKeys = ['APHEXDATA_URL', 'APHEXDATA_API_KEY', 'APHEXDATA_AGENT_ID'];
+  const aphexdataKeys = [
+    'APHEXDATA_URL',
+    'APHEXDATA_API_KEY',
+    'APHEXDATA_AGENT_ID',
+  ];
   const aphexdataEnv = readEnvFile(aphexdataKeys);
   for (const key of aphexdataKeys) {
     const val = process.env[key] || aphexdataEnv[key];
