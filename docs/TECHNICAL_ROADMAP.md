@@ -307,8 +307,7 @@ SUI/USDT:USDT    APT/USDT:USDT    ARB/USDT:USDT    OP/USDT:USDT
 **NanoClaw prompt:**
 
 ```
-I have 397 FreqTrade strategy .py files in:
-D:\Users\scale\Code\open-strategy\open-strategy\quant-tactics\nova\
+I have 397 FreqTrade strategy .py files in /nova directory.
 
 For each file:
 1. Copy it to /freqtrade/user_data/strategies/
