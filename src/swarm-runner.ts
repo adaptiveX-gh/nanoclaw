@@ -363,7 +363,28 @@ function processRequest(requestFile: string): void {
 
   // Route by run_type: each type uses a different CLI subcommand
   let pythonArgs: string[];
-  if (manifest.run_type === 'autoresearch') {
+  if (manifest.run_type === 'strategy_scan') {
+    // Read strategy_name from spec
+    let strategyName = '';
+    try {
+      const spec = JSON.parse(fs.readFileSync(specPath, 'utf-8'));
+      strategyName = spec.strategy_name || '';
+    } catch {
+      // Will fail below
+    }
+    if (!strategyName) {
+      writeStatus(runId, {
+        run_id: runId,
+        status: 'failed',
+        run_type: manifest.run_type,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        error: 'strategy_scan spec must contain strategy_name',
+      });
+      return;
+    }
+    pythonArgs = ['-m', 'src', 'scan', strategyName];
+  } else if (manifest.run_type === 'autoresearch') {
     pythonArgs = [
       '-m',
       'src',
@@ -444,6 +465,37 @@ function processRequest(requestFile: string): void {
     activeJobs.delete(runId);
     const finishedAt = new Date().toISOString();
     const succeeded = code === 0;
+
+    // For strategy_scan: parse JSON from stdout and embed in status
+    if (manifest.run_type === 'strategy_scan') {
+      let scanResult: Record<string, unknown> | undefined;
+      if (succeeded) {
+        try {
+          scanResult = JSON.parse(stdout.trim());
+        } catch {
+          // stdout was not valid JSON
+        }
+      }
+      writeStatus(runId, {
+        run_id: runId,
+        status: succeeded ? 'completed' : 'failed',
+        run_type: 'strategy_scan',
+        started_at: startedAt,
+        finished_at: finishedAt,
+        exit_code: code,
+        ...(scanResult ? { result: scanResult } : {}),
+        ...(stderr && !succeeded ? { error: stderr.slice(0, 2000) } : {}),
+      });
+      if (succeeded && scanResult) {
+        const eligibility = (scanResult as Record<string, unknown>).mutation_eligibility as Record<string, unknown> | undefined;
+        const families = eligibility?.eligible_patch_families as string[] | undefined;
+        notifyUser(
+          job.chatJid,
+          `Strategy scan complete for ${(scanResult as Record<string, unknown>).strategy_ref ? JSON.stringify((scanResult as Record<string, unknown>).strategy_ref) : 'unknown'}.\nEligible families: ${families?.join(', ') || 'none'}`,
+        );
+      }
+      return;
+    }
 
     // Try to read summary stats from results.json for the status
     let summary: Record<string, unknown> | undefined;

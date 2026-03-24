@@ -1,8 +1,9 @@
 /**
  * Stdio MCP Server for NanoClaw FreqSwarm Integration
- * Provides 14 tools: 6 read-only for viewing strategy research reports,
+ * Provides 15 tools: 6 read-only for viewing strategy research reports,
  * 6 trigger tools for matrix sweeps, batch backtests, autoresearch batches, and job management,
- * 2 seed library tools for loading pre-built native sdna seed genomes.
+ * 2 seed library tools for loading pre-built native sdna seed genomes,
+ * 1 strategy scanner tool for determining mutation eligibility of non-sdna strategies.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -644,6 +645,49 @@ server.tool(
       return ok({ genome, message: `Loaded seed: ${name} (genome_id=${contentHash})` });
     } catch (e) {
       return err(`Failed to load seed: ${(e as Error).message}`);
+    }
+  },
+);
+
+// ─── Strategy Scanner ─────────────────────────────────────────────────
+
+server.tool(
+  'swarm_scan_strategy',
+  'Scan a Freqtrade strategy to determine what patch-based mutations are safe to apply. Returns strategy_ref (for use in swarm_trigger_autoresearch with execution_backend="derived_subclass"), strategy_facts (scanner observations), and mutation_eligibility (which patch families are eligible: risk_override, param_pin). Poll with swarm_poll_run (~5s). This is the recommended way to start autoresearch on non-sdna (pre-existing Python) strategies.',
+  {
+    name: z.string().describe('Strategy class name (e.g. "BbandsRsiAdx"). The .py file must exist in the swarm strategies dir.'),
+  },
+  async ({ name }) => {
+    try {
+      const runId = `scan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      fs.mkdirSync(REQUEST_DIR, { recursive: true });
+
+      // Write spec
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.spec.json`),
+        JSON.stringify({ strategy_name: name }, null, 2),
+      );
+
+      // Write request manifest
+      fs.writeFileSync(
+        path.join(REQUEST_DIR, `${runId}.request.json`),
+        JSON.stringify({
+          run_id: runId,
+          run_type: 'strategy_scan',
+          submitted_at: new Date().toISOString(),
+          group_folder: process.env.GROUP_FOLDER || '',
+          chat_jid: process.env.NANOCLAW_CHAT_JID || '',
+        }, null, 2),
+      );
+
+      log(`Scan submitted: ${runId} for strategy=${name}`);
+      return ok({
+        run_id: runId,
+        status: 'submitted',
+        message: 'Strategy scan submitted. Poll with swarm_poll_run (~5s). Result includes strategy_ref, strategy_facts, mutation_eligibility.',
+      });
+    } catch (e) {
+      return err(`Failed to submit scan: ${(e as Error).message}`);
     }
   },
 );
