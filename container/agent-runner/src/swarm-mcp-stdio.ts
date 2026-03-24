@@ -1,12 +1,14 @@
 /**
  * Stdio MCP Server for NanoClaw FreqSwarm Integration
- * Provides 12 tools: 6 read-only for viewing strategy research reports,
- * 6 trigger tools for matrix sweeps, batch backtests, autoresearch batches, and job management.
+ * Provides 14 tools: 6 read-only for viewing strategy research reports,
+ * 6 trigger tools for matrix sweeps, batch backtests, autoresearch batches, and job management,
+ * 2 seed library tools for loading pre-built native sdna seed genomes.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -588,6 +590,60 @@ server.tool(
       });
     } catch (e) {
       return err(`Failed to submit batch backtest: ${(e as Error).message}`);
+    }
+  },
+);
+
+// ─── Seed Library ─────────────────────────────────────────────────────
+
+const SEED_DIR = path.join(REPORT_DIR, 'seeds');
+
+server.tool(
+  'swarm_list_seeds',
+  'List available native sdna seed genomes in the seed library. These are pre-built, verified genomes guaranteed to compile and run correctly with the autoresearch mutation engine. Use swarm_load_seed to get the full genome JSON for submission.',
+  {},
+  async () => {
+    try {
+      if (!fs.existsSync(SEED_DIR)) {
+        return ok({ seeds: [], message: 'Seed library is empty.' });
+      }
+      const seeds = fs.readdirSync(SEED_DIR)
+        .filter(f => f.endsWith('.genome.json'))
+        .map(f => f.replace('.genome.json', ''));
+      log(`Listed ${seeds.length} seed genomes`);
+      return ok({ seeds, total: seeds.length });
+    } catch (e) {
+      return err(`Failed to list seeds: ${(e as Error).message}`);
+    }
+  },
+);
+
+server.tool(
+  'swarm_load_seed',
+  'Load a pre-built native sdna seed genome from the seed library by name. Returns the genome JSON ready to pass as genome in seed_genomes[] of swarm_trigger_autoresearch. Genome IDs are auto-generated from content hash. Use swarm_list_seeds to see available seeds.',
+  {
+    name: z.string().describe('Seed genome name (e.g. "RSI_MACD_STOCHASTIC_TON", "Donchian_EMA_ADX_CHOP_WFO"). Get names from swarm_list_seeds.'),
+  },
+  async ({ name }) => {
+    try {
+      const seedPath = path.join(SEED_DIR, `${name}.genome.json`);
+      if (!fs.existsSync(seedPath)) {
+        const available = fs.existsSync(SEED_DIR)
+          ? fs.readdirSync(SEED_DIR).filter(f => f.endsWith('.genome.json')).map(f => f.replace('.genome.json', ''))
+          : [];
+        return err(`Seed not found: ${name}. Available: ${available.join(', ') || 'none'}`);
+      }
+      const genome = JSON.parse(fs.readFileSync(seedPath, 'utf-8'));
+
+      // Auto-generate genome_id: SHA-256[:16] of content excluding identity (matches Python content_hash())
+      const { identity: _identity, ...content } = genome;
+      const contentHash = crypto.createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16);
+      genome.identity = { ...genome.identity, genome_id: contentHash };
+
+      log(`Loaded seed: ${name} (genome_id=${contentHash})`);
+      return ok({ genome, message: `Loaded seed: ${name} (genome_id=${contentHash})` });
+    } catch (e) {
+      return err(`Failed to load seed: ${(e as Error).message}`);
     }
   },
 );
