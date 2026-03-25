@@ -212,17 +212,26 @@ function ensureSwarmConfig(groupFolder: string, specPath: string): string {
     try {
       const cfg = JSON.parse(fs.readFileSync(swarmConfigPath, 'utf-8'));
       let patched = false;
-      if (cfg.entry_pricing?.price_side && cfg.entry_pricing.price_side !== 'other') {
+      if (
+        cfg.entry_pricing?.price_side &&
+        cfg.entry_pricing.price_side !== 'other'
+      ) {
         cfg.entry_pricing.price_side = 'other';
         patched = true;
       }
-      if (cfg.exit_pricing?.price_side && cfg.exit_pricing.price_side !== 'other') {
+      if (
+        cfg.exit_pricing?.price_side &&
+        cfg.exit_pricing.price_side !== 'other'
+      ) {
         cfg.exit_pricing.price_side = 'other';
         patched = true;
       }
       if (patched) {
         fs.writeFileSync(swarmConfigPath, JSON.stringify(cfg, null, 2));
-        logger.info({ dst: swarmConfigPath }, 'Patched price_side to "other" for freqtrade 2026.2');
+        logger.info(
+          { dst: swarmConfigPath },
+          'Patched price_side to "other" for freqtrade 2026.2',
+        );
       }
     } catch {
       // Non-critical — config still usable without patch
