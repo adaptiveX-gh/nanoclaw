@@ -135,6 +135,8 @@ Read the user's message and match:
 5. `sdna_fork` with any user-requested mutations
 6. `sdna_compile` + `sdna_compile_config`
 7. Follow Workflow A from step 1
+8. **If abandoned before Workflow A** (validation failed, no trades, idea scrapped):
+   - `aphexdata_record_event` (verb: "discarded", object_type: "strategy", object_id: <name>, result_data: {parent_hash, mutation_type, reason})
 
 ## Workflow C: Comparison & Lineage
 
@@ -191,10 +193,15 @@ FreqHub CLI commands (run via bash):
    - Indicator period ±25% (e.g., RSI 14 → 10, 18, 21)
    - Risk params: stop_loss ±1%, take_profit ±2%
    - Regime filter: enable/disable, different thresholds
-6. For each mutation: `sdna_fork` → `sdna_compile` → backtest → walk-forward → attest → register
+6. For each mutation:
+   a. `sdna_fork` → `sdna_compile` → `freqtrade_run_backtest` → `freqtrade_run_walk_forward`
+   b. **If improved:** `sdna_ingest_backtest` → `sdna_attest` → `sdna_registry_add` → `aphexdata_record_event` (verb: "attested", result_data: {parent_hash, mutation_type, wf_sharpe, parent_sharpe})
+   c. **If not improved:** `aphexdata_record_event` (verb: "discarded", result_data: {parent_hash, mutation_type, wf_sharpe, parent_sharpe, reason})
 7. Rebuild registry: `sdna build content/ -o dist/` (bash)
 8. Report comparison table: mutation | WF Sharpe | vs baseline | verdict
 9. Identify best-performing mutation and suggest further exploration directions
+10. `sdna publish content/` (bash) — publish any new keepers to FreqHub
+11. `aphexdata_record_event` (verb: "loop_complete", object_type: "report", result_data: {base_genome, total_mutations, kept, discarded, best_wf_sharpe})
 
 ## Workflow G: Batch Exploration
 
@@ -208,10 +215,14 @@ FreqHub CLI commands (run via bash):
    c. `freqtrade_run_backtest` (skip hyperopt for batch — too slow)
    d. `freqtrade_run_walk_forward`
    e. `sdna_ingest_backtest` → `sdna_attest` → `sdna_registry_add`
+   f. `aphexdata_record_event` — verb "attested" if keeper (WF Sharpe above threshold), "discarded" if reject (include parent_hash, mutation, metrics, reason)
 4. Rebuild registry: `sdna build content/ -o dist/` (bash)
+4b. `sdna publish content/` (bash) — publish keepers to FreqHub
 5. Report comparison matrix: genome | mutation | WF Sharpe | drawdown | trades | verdict
 6. Highlight: best overall, best per-family, most improved
 7. If scheduled overnight: send summary via `send_message` in the morning
+8. `aphexdata_record_event` (verb: "loop_complete", object_type: "report", result_data: {total_experiments, kept, discarded, best_sharpe})
+9. Verify every experiment has an aphexDATA entry (attested or discarded) before sending the report.
 
 ## Workflow H: Data Management
 

@@ -73,6 +73,69 @@ aphexdata_query_events(object_type="trade", limit=20)
 aphexdata_record_event(verb_id="completed", verb_category="analysis", object_type="backtest", object_id="RSI_EMA_2024", result_data={"profit_pct": 15.3, "max_drawdown": -8.2, "trades": 142})
 ```
 
+## Research Experiment Patterns
+
+Record every experiment outcome — keepers AND rejects. This builds the audit trail
+that prevents re-testing failed mutations and powers research metrics.
+
+**Log a kept mutation (strategy improved):**
+```
+aphexdata_record_event(
+  verb_id="attested", verb_category="analysis", object_type="strategy",
+  object_id="RSI_TightStop_v2",
+  result_data={"parent_hash": "sha256:5f12...", "mutation_type": "risk_param",
+    "wf_sharpe": 1.35, "parent_sharpe": 1.10, "max_dd": -0.12, "trades": 48})
+```
+
+**Log a discarded mutation (did not improve):**
+```
+aphexdata_record_event(
+  verb_id="discarded", verb_category="analysis", object_type="strategy",
+  object_id="RSI_LooseStop_v2",
+  result_data={"parent_hash": "sha256:5f12...", "mutation_type": "risk_param",
+    "wf_sharpe": 0.45, "parent_sharpe": 1.10, "reason": "sharpe degraded 59%"})
+```
+
+**Log a ClawTeam evolution round:**
+```
+aphexdata_record_event(
+  verb_id="evolution_round", verb_category="analysis", object_type="strategy",
+  object_id="EMA_Crossover_v3",
+  result_data={"round": 2, "pattern": "P4_exit_ab", "gate_result": "kept",
+    "sortino_before": 0.8, "sortino_after": 1.1})
+```
+
+**Log a graduated strategy:**
+```
+aphexdata_record_event(
+  verb_id="strategy_graduated", verb_category="analysis", object_type="strategy",
+  object_id="EMA_Crossover_v4",
+  result_data={"rounds_used": 4, "final_sharpe": 1.45, "walkforward_degradation_pct": 18})
+```
+
+**Log batch/loop completion:**
+```
+aphexdata_record_event(
+  verb_id="loop_complete", verb_category="analysis", object_type="report",
+  object_id="autoresearch_RSI_family",
+  result_data={"total_experiments": 5, "kept": 2, "discarded": 3,
+    "best_sharpe": 1.35, "baseline_sharpe": 1.10})
+```
+
+**Verb conventions:**
+
+| Verb | When | object_type |
+|------|------|-------------|
+| `attested` | Mutation kept, genome registered | `strategy` |
+| `discarded` | Mutation rejected (negative result) | `strategy` |
+| `evolution_round` | One round of ClawTeam evolution | `strategy` |
+| `strategy_graduated` | Strategy met fitness targets | `strategy` |
+| `evolution_stalled` | Evolution stopped without graduation | `strategy` |
+| `loop_complete` | Batch/autoresearch loop finished | `report` |
+| `completed` | Backtest or analysis finished | `backtest` |
+
+**Deduplication:** Before running mutations, query `aphexdata_query_events(verb_id="discarded", object_type="strategy")` to skip mutations already logged as failed.
+
 ## Connection Errors
 
 - `APHEXDATA_URL not configured` — set `APHEXDATA_URL` in `.env` (e.g. `http://host.docker.internal:3100`)

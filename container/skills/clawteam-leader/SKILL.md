@@ -591,15 +591,17 @@ ROUND 4 — VALIDATE
 PART 5: INTEGRATION HOOKS
 ═══════════════════════════════════════════════════════════════════════
 
-### FreqHub / StrategyDNA (if available)
-- After each KEPT mutation: sdna compile for genome fingerprint
-- After GRADUATION: sdna attest + sdna registry add
+### FreqHub / StrategyDNA
+- After each KEPT mutation: `sdna_ingest_backtest` → `sdna_attest` → `sdna_registry_add`
+- After GRADUATION: `sdna build content/ -o dist/` (bash) then `sdna publish content/` (bash)
 - Record lineage: v0 → v1 → v2 with round_history annotations
 
-### TDS (if available)
-- After each round: tds_record_event verb="evolution_round"
-- After GRADUATION: tds_record_event verb="strategy_graduated"
-- After STOP/PIVOT: tds_record_event verb="evolution_stalled"
+### aphexDATA (audit trail)
+- After each KEPT mutation: `aphexdata_record_event` verb="attested" (include parent_hash, mutation_type, sharpe_before, sharpe_after)
+- After each REVERTED mutation: `aphexdata_record_event` verb="discarded" (include reason, metrics)
+- After each round: `aphexdata_record_event` verb="evolution_round" (include round#, pattern, gate_result)
+- After GRADUATION: `aphexdata_record_event` verb="strategy_graduated" (include rounds_used, final_metrics)
+- After STOP/PIVOT: `aphexdata_record_event` verb="evolution_stalled" (include stall_counter, reason)
 
 ### Discovery Leagues (if available)
 - Graduated strategies enter the leaderboard automatically

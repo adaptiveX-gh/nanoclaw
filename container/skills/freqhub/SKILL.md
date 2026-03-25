@@ -151,3 +151,25 @@ The CLI merges all configured sources when searching. Remote registries are cach
 3. sdna fork frontier.sdna -m '...' -o child.sdna # Fork with mutations
 4. Compile, backtest, attest
 ```
+
+### After Experiments (aphexDATA → FreqHub Pipeline)
+
+When a mutation produces a keeper:
+
+1. **Log to aphexDATA:** `aphexdata_record_event` with verb `"attested"`
+2. **Register locally:** `sdna_ingest_backtest` → `sdna_attest` → `sdna_registry_add` (aphexDNA MCP)
+3. **Rebuild CLI registry:** `sdna build content/ -o dist/` (bash) — keeps leaderboard/frontier current
+4. **Publish to FreqHub:** `sdna publish content/` (bash) — shares attested genomes on community registry
+
+When a mutation is rejected:
+
+1. **Log to aphexDATA only:** `aphexdata_record_event` with verb `"discarded"` (include parent_hash, mutation_type, Sharpe comparison)
+2. No FreqHub registration — rejected strategies are never published
+3. Future runs query `aphexdata_query_events(verb_id="discarded")` to avoid retesting
+
+After a batch or autoresearch loop:
+
+1. Verify every experiment has an aphexDATA entry (attested or discarded)
+2. `sdna build content/ -o dist/` to refresh the local registry
+3. `sdna publish content/` to push all new keepers to FreqHub
+4. `aphexdata_record_event` with verb `"loop_complete"` to close out the batch
