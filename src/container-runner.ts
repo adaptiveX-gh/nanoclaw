@@ -304,6 +304,14 @@ function buildContainerArgs(
     if (val) args.push('-e', `${key}=${val}`);
   }
 
+  // Forward Orderflow API URL to container (no auth needed, public API)
+  const ofKeys = ['ORDERFLOW_API_URL'];
+  const ofEnv = readEnvFile(ofKeys);
+  for (const key of ofKeys) {
+    const val = process.env[key] || ofEnv[key];
+    if (val) args.push('-e', `${key}=${val}`);
+  }
+
   // Swarm: always use the container-side path (matches the bind mount).
   // Do NOT forward host SWARM_REPORT_DIR — it may be a host-side absolute
   // path or relative path that doesn't exist inside the container.
@@ -496,7 +504,8 @@ export async function runContainerAgent(
         if (
           line.includes('[FREQTRADE]') ||
           line.includes('[aphexDATA]') ||
-          line.includes('[SWARM]')
+          line.includes('[SWARM]') ||
+          line.includes('[ORDERFLOW]')
         ) {
           logger.info({ container: group.folder }, line);
         } else if (line) {

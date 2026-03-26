@@ -1,0 +1,164 @@
+# Canonical Strategy Archetype Taxonomy
+# 7 archetypes × 5 pairs × 4 timeframes = 140 cells
+
+archetypes:
+  TREND_MOMENTUM:
+    description: "Ride directional moves with momentum confirmation"
+    preferred_regimes: [EFFICIENT_TREND]
+    anti_regimes: [CHAOS, COMPRESSION]
+    preferred_pairs: [BTC, ETH, SOL]
+    preferred_timeframes: [1h, 4h]
+    risk_profile:
+      max_drawdown: 0.15
+      typical_win_rate: 0.40
+      typical_rr_ratio: 2.5
+      sizing_base: 1.0
+    strategy_tags: [trend_following, momentum, ema_crossover, adx_trend]
+
+  MEAN_REVERSION:
+    description: "Fade extremes in ranging/quiet markets"
+    preferred_regimes: [TRANQUIL, COMPRESSION]
+    anti_regimes: [EFFICIENT_TREND, CHAOS]
+    preferred_pairs: [BTC, ETH, SOL, XRP, DOGE]
+    preferred_timeframes: [15m, 1h]
+    risk_profile:
+      max_drawdown: 0.10
+      typical_win_rate: 0.60
+      typical_rr_ratio: 1.2
+      sizing_base: 0.8
+    strategy_tags: [mean_reversion, rsi, bollinger, stochastic]
+
+  BREAKOUT:
+    description: "Catch regime transitions from compression to trend"
+    preferred_regimes: [COMPRESSION]
+    anti_regimes: [TRANQUIL, CHAOS]
+    preferred_pairs: [BTC, ETH]
+    preferred_timeframes: [1h, 4h]
+    risk_profile:
+      max_drawdown: 0.12
+      typical_win_rate: 0.35
+      typical_rr_ratio: 3.0
+      sizing_base: 0.7
+    strategy_tags: [breakout, donchian, range_breakout, volatility_expansion]
+
+  RANGE_BOUND:
+    description: "Trade within established ranges with tight risk"
+    preferred_regimes: [TRANQUIL]
+    anti_regimes: [EFFICIENT_TREND, CHAOS]
+    preferred_pairs: [BTC, ETH, SOL, XRP, DOGE]
+    preferred_timeframes: [15m, 1h]
+    risk_profile:
+      max_drawdown: 0.08
+      typical_win_rate: 0.65
+      typical_rr_ratio: 1.0
+      sizing_base: 0.6
+    strategy_tags: [range, support_resistance, grid, ping_pong]
+
+  SCALPING:
+    description: "High-frequency small profits in liquid markets"
+    preferred_regimes: [EFFICIENT_TREND, TRANQUIL]
+    anti_regimes: [CHAOS]
+    preferred_pairs: [BTC, ETH]
+    preferred_timeframes: [5m, 15m]
+    risk_profile:
+      max_drawdown: 0.05
+      typical_win_rate: 0.55
+      typical_rr_ratio: 1.5
+      sizing_base: 0.5
+    strategy_tags: [scalping, micro_trend, tick, spread]
+
+  CARRY_FUNDING:
+    description: "Capture funding rate differentials in quiet markets"
+    preferred_regimes: [TRANQUIL]
+    anti_regimes: [CHAOS, EFFICIENT_TREND]
+    preferred_pairs: [BTC, ETH, SOL, XRP, DOGE]
+    preferred_timeframes: [4h, 1d]
+    risk_profile:
+      max_drawdown: 0.06
+      typical_win_rate: 0.70
+      typical_rr_ratio: 0.8
+      sizing_base: 0.4
+    strategy_tags: [carry, funding_rate, basis_trade, cash_and_carry]
+
+  VOLATILITY_HARVEST:
+    description: "Profit from volatility expansion in chaotic/compressed markets"
+    preferred_regimes: [CHAOS, COMPRESSION]
+    anti_regimes: [TRANQUIL]
+    preferred_pairs: [BTC, ETH]
+    preferred_timeframes: [1h, 4h]
+    risk_profile:
+      max_drawdown: 0.20
+      typical_win_rate: 0.35
+      typical_rr_ratio: 3.5
+      sizing_base: 0.5
+    strategy_tags: [volatility, straddle, gamma, supertrend, atr_expansion]
+
+# Cell grid dimensions
+pairs:
+  - BTC
+  - ETH
+  - SOL
+  - XRP
+  - DOGE
+
+timeframes:
+  - 5m
+  - 15m
+  - 1h
+  - 4h
+
+# Total cells: 7 archetypes × 5 pairs × 4 timeframes = 140
+
+# Scoring rubric
+scoring:
+  regime_fit:
+    description: "Does the current regime match this archetype's preferred regimes?"
+    scale: 0-6
+    rules:
+      - "6: Current regime is in preferred_regimes AND conviction >= 80"
+      - "5: Current regime is in preferred_regimes AND conviction >= 60"
+      - "4: Current regime is in preferred_regimes AND conviction < 60"
+      - "3: Current regime is neutral (not preferred, not anti)"
+      - "2: Current regime is in anti_regimes BUT conviction < 40"
+      - "1: Current regime is in anti_regimes AND conviction >= 40"
+      - "0: Current regime is in anti_regimes AND conviction >= 60"
+
+  execution_fit:
+    description: "Is the market microstructure suitable for clean execution?"
+    scale: 0-6
+    rules:
+      - "6: Book balanced, whale flow aligned with direction, aggressor ratio confirms"
+      - "5: Two of three microstructure signals aligned"
+      - "4: One strong microstructure signal, others neutral"
+      - "3: All microstructure signals neutral"
+      - "2: One negative microstructure signal"
+      - "1: Two negative signals (e.g., whale selling + ask-heavy book)"
+      - "0: All three negative — adverse microstructure"
+
+  net_edge:
+    description: "Historical backtest performance for best strategy at this cell"
+    scale: 0-6
+    rules:
+      - "6: WF Sharpe >= 1.5 AND max DD < 10% AND trades >= 30"
+      - "5: WF Sharpe >= 1.0 AND max DD < 15%"
+      - "4: WF Sharpe >= 0.5 AND max DD < 20%"
+      - "3: WF Sharpe >= 0.0 (breakeven)"
+      - "2: WF Sharpe < 0.0 but > -0.5 (mild negative)"
+      - "1: WF Sharpe < -0.5 (clearly negative)"
+      - "0: No backtest data OR WF Sharpe < -1.0"
+
+  composite:
+    description: "Weighted blend of three subscores"
+    formula: "composite = (regime_fit × 0.4) + (execution_fit × 0.25) + (net_edge × 0.35)"
+    deploy_threshold: 3.5
+    undeploy_threshold: 2.0
+
+# Portfolio constraints
+portfolio:
+  max_deployments_per_archetype: 3
+  max_deployments_per_pair: 2
+  max_total_deployments: 10
+  max_capital_pct_per_deployment: 0.15
+  max_capital_pct_per_archetype: 0.35
+  max_capital_pct_per_pair: 0.30
+  portfolio_dd_circuit_breaker: 0.15

@@ -411,6 +411,17 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
     log('MCP: clawteam enabled (main group)');
   }
 
+  // Orderflow: real-time regime + microstructure (no auth required)
+  const orderflowUrl = process.env.ORDERFLOW_API_URL || 'https://orderflow.tradev.app';
+  servers.orderflow = {
+    command: 'node',
+    args: [path.join(path.dirname(mcpServerPath), 'orderflow-mcp-stdio.js')],
+    env: {
+      ORDERFLOW_API_URL: orderflowUrl,
+    },
+  };
+  log(`MCP: orderflow enabled (url=${orderflowUrl})`);
+
   log(`MCP servers: ${Object.keys(servers).join(', ')}`);
   return servers;
 }
@@ -513,6 +524,7 @@ async function runQuery(
         'mcp__aphexdata__*',
         'mcp__swarm__*',
         'mcp__clawteam__*',
+        'mcp__orderflow__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
