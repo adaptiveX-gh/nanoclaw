@@ -86,6 +86,154 @@ Users can override any threshold via `/workspace/group/auto-mode/config.json`.
 
 ---
 
+## Security Hardening
+
+### 1. Main-Group Gate
+
+Auto-mode commands that affect capital MUST only run in the main group.
+Before executing any capital-affecting command, check:
+
+```bash
+[ "$NANOCLAW_IS_MAIN" = "1" ] || echo "DENIED: auto-mode capital operations require main group"
+```
+
+**Capital-affecting commands** (require main group):
+- `activate` / `approve` (SHADOW → ACTIVE)
+- `resume` (PAUSED → ACTIVE)
+- `retire` (stops bot permanently)
+- `shadow track` (creates deployment entry)
+- `set threshold` (modifies config)
+- `emergency stop`
+
+**Read-only commands** (allowed from any group):
+- `show auto-mode status`
+- `show opportunities`
+- `show retirement candidates`
+- `show portfolio health`
+
+### 2. Confirmation Tokens for Irreversible Actions
+
+Actions that start or permanently stop live capital require a two-step confirmation.
+When the user requests an irreversible action, respond with a confirmation prompt
+containing a random 4-character token. The user must reply with the exact token.
+
+**Actions requiring confirmation:**
+- SHADOW → ACTIVE: `"Activating EMA_Cross_v3 on BTC/USDT 1h with $100 stake. Type CONFIRM-A7K2 to proceed."`
+- RETIRE with open positions: `"Retiring EMA_Cross_v3 — has 2 open positions. Type CONFIRM-X9P1 to proceed."`
+- EMERGENCY STOP: `"This will stop ALL bots immediately. Type CONFIRM-STOP to proceed."`
+
+Generate the token from the deployment ID + current timestamp (deterministic but
+not guessable). Do NOT execute the action until the user replies with the exact token
+in the same conversation turn.
+
+**Actions that do NOT need confirmation** (safe direction / reversible):
+- Shadow track (no capital at risk)
+- Pause (protective)
+- Throttle (automatic, protective)
+- Show/read commands
+
+### 3. Absolute Capital Limits
+
+Beyond percentage-based constraints, enforce hard dollar limits:
+
+| Limit | Default | Config Key |
+|-------|---------|------------|
+| Max capital per single deployment | $500 | `max_stake_amount_usd` |
+| Max total capital across all deployments | $2500 | `max_total_capital_usd` |
+| Max new capital deployed per 24h | $1000 | `max_daily_new_capital_usd` |
+
+Track daily deployment capital in `portfolio.json`:
+```json
+{
+  "daily_deployed_usd": 300,
+  "daily_deployed_reset_at": "2026-03-25T00:00:00Z"
+}
+```
+
+If a deployment would exceed any limit, block it and message the user:
+```
+"Blocked: activating EMA_Cross_v3 ($100) would exceed daily deployment limit
+($1000). $900 already deployed today. Override with 'set limit max_daily_new_capital_usd=1500'."
+```
+
+### 4. Deployment Rate Limit
+
+Prevent rapid-fire deployments that could overwhelm risk management:
+
+| Limit | Default | Config Key |
+|-------|---------|------------|
+| Max new activations per hour | 3 | `max_activations_per_hour` |
+| Cooldown between activations | 5 minutes | `activation_cooldown_minutes` |
+
+Track in `portfolio.json`:
+```json
+{
+  "recent_activations": [
+    {"deployment_id": "dep_btc_...", "activated_at": "2026-03-25T17:30:00Z"}
+  ]
+}
+```
+
+### 5. Emergency Stop
+
+The `EMERGENCY STOP` command (after confirmation) immediately:
+1. Calls `freqtrade_stop_bot(confirm=true)` for ALL active and throttled deployments
+2. Sets `portfolio.circuit_breaker_active = true`
+3. Calls `pause_task(name="auto_mode_check")` to stop the scheduled monitoring
+4. Transitions all non-retired deployments to PAUSED
+5. Writes state atomically
+6. Logs `aphexdata_record_event(verb_id="emergency_stop", verb_category="risk", object_type="portfolio")`
+7. Messages user: "EMERGENCY STOP executed. All bots stopped. Scheduler paused. Manual 'enable auto-mode' + individual re-approval required to resume."
+
+Recovery from emergency stop requires:
+- `enable auto-mode` (restarts scheduler)
+- Individual `approve` commands for each deployment (with confirmation tokens)
+
+### 6. Dry-Run Mode
+
+When `config.json` contains `"dry_run": true`:
+- ALL transitions are computed and logged normally
+- ALL state file updates happen normally (so hysteresis tracking works)
+- NO freqtrade actions are executed (Step 13 is skipped entirely)
+- Messages include `[DRY RUN]` prefix
+- aphexDATA events include `"dry_run": true` in result_data
+
+This allows testing the full decision pipeline without risking capital.
+
+Enable: `"Set auto-mode to dry run"` → writes `"dry_run": true` to config.json
+Disable: `"Set auto-mode to live"` → writes `"dry_run": false` to config.json
+
+### 7. State File Integrity
+
+Each state file includes a `_checksum` field — a SHA-256 hash of the file content
+(excluding the `_checksum` field itself). On read, verify the checksum matches.
+
+```json
+{
+  "version": 1,
+  "deployments": [...],
+  "last_updated": "...",
+  "_checksum": "a3f2b8c1..."
+}
+```
+
+**On write (Step 12):** Compute checksum of the JSON content without `_checksum`,
+then add `_checksum` field before writing.
+
+**On read (Step 3):** Verify checksum. If mismatch:
+- Log `aphexdata_record_event(verb_id="integrity_violation", verb_category="security", object_type="state_file")`
+- Message user: "State file integrity check failed for {filename}. File may have been tampered with. Entering safe mode — all transitions blocked until resolved."
+- Skip all transitions for this tick (read-only mode)
+- Do NOT overwrite the file (preserve evidence)
+
+Compute checksum via:
+```bash
+# Write: compute hash of content without _checksum
+echo '{"version":1,...}' | sha256sum | cut -d' ' -f1
+```
+
+---
+
 ## 15-Minute Check Procedure (15 Steps)
 
 This is the core algorithm. Execute these steps in order on every scheduled tick.
@@ -528,7 +676,13 @@ mkdir -p /workspace/group/auto-mode
   "pnl_retire_threshold_pct": -10,
   "throttle_stake_modifier": 0.5,
   "dd_warning_threshold_pct": 10,
-  "silent_when_no_changes": true
+  "silent_when_no_changes": true,
+  "dry_run": false,
+  "max_stake_amount_usd": 500,
+  "max_total_capital_usd": 2500,
+  "max_daily_new_capital_usd": 1000,
+  "max_activations_per_hour": 3,
+  "activation_cooldown_minutes": 5
 }
 ```
 
@@ -556,6 +710,9 @@ If this file doesn't exist, use defaults from the thresholds table above.
 | "Set threshold deploy=4.0" | Update config.json with new threshold value |
 | "Disable auto-mode" | `pause_task(name="auto_mode_check")` |
 | "Enable auto-mode" | `resume_task(name="auto_mode_check")` |
+| "EMERGENCY STOP" | Confirm token → stop ALL bots, pause scheduler, pause all deployments |
+| "Set auto-mode to dry run" | Write `"dry_run": true` to config.json. All checks run but no freqtrade actions |
+| "Set auto-mode to live" | Write `"dry_run": false` to config.json. Resume freqtrade actions |
 
 ---
 
@@ -607,6 +764,10 @@ When monitoring needs context (during hourly regime refresh):
 | `opportunity_detected` | analysis | deployment | High-scoring cell with matching strategy |
 | `opportunity_acted` | execution | deployment | User shadow-tracked a recommendation |
 | `retirement_recommended` | analysis | deployment | Deployment meets retirement criteria |
+| `emergency_stop` | risk | portfolio | EMERGENCY STOP executed |
+| `integrity_violation` | security | state_file | State file checksum mismatch detected |
+| `dry_run_toggled` | config | system | Dry-run mode enabled or disabled |
+| `capital_limit_blocked` | risk | deployment | Activation blocked by capital/rate limit |
 
 ---
 
