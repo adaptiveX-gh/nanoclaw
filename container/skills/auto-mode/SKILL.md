@@ -31,6 +31,196 @@ The boundary is sacred: Auto-Mode operates strategies, Research improves them.
 | `freqtrade-mcp` | Bot status, profit, balance (health monitoring) |
 | `aphexdata` | Audit trail for all lifecycle events |
 
+---
+
+## Pre-Staged Deployment Roster
+
+**Core principle:** Don't assemble deployments at opportunity time. Pre-stage them
+so deployment is just flipping a switch. When ETH flips to EFFICIENT_TREND at 3am,
+there's no file copying or config editing — the config already exists.
+
+### How Staging Works
+
+Every graduated strategy gets a complete, ready-to-launch FreqTrade config
+generated at graduation time, not at deployment time. Run staging after any
+strategy graduates or when user says "Stage all graduated strategies".
+
+**Staging procedure:**
+
+```
+For each .py file in /workspace/group/user_data/strategies/:
+  Read header tags (first 10 lines):
+    # ARCHETYPE: <type>
+    # GRADUATED: true|false|<date>
+    # VALIDATED_PAIRS: <pair1>, <pair2>, ...
+    # WALK_FORWARD_DEGRADATION: <pct>
+
+  If GRADUATED is truthy (true, or a date string):
+    1. Verify strategy file is accessible to FreqTrade
+       (copy to strategies dir if in triage/ subfolder)
+
+    2. For each pair in VALIDATED_PAIRS:
+       Create a roster entry in /workspace/group/auto-mode/roster.json
+
+    3. Pre-generate a COMPLETE FreqTrade config fragment:
+       Save to: /workspace/group/auto-mode/configs/{strategy}_{pair}_{tf}.json
+       All values filled in. No manual editing needed at deploy time.
+```
+
+### Roster Entry Format
+
+```json
+{
+  "strategy_name": "AroonMacd_ADX",
+  "strategy_path": "/workspace/group/user_data/strategies/AroonMacd_ADX.py",
+  "archetype": "TREND_MOMENTUM",
+  "validated_pairs": ["ETH/USDT:USDT", "BTC/USDT:USDT"],
+  "timeframe": "1h",
+  "base_stake_pct": 5,
+  "wf_degradation_pct": 18,
+  "cells": [
+    {
+      "pair": "ETH/USDT:USDT",
+      "timeframe": "1h",
+      "config_path": "/workspace/group/auto-mode/configs/AroonMacd_ADX_ETH_1h.json",
+      "status": "staged",
+      "last_activated": null,
+      "activation_count": 0
+    }
+  ]
+}
+```
+
+Cell status values: `staged` (ready but dormant), `shadow` (dry-run active),
+`active` (live capital), `deactivated` (was active, now back to dormant).
+
+### Instant Activation
+
+When auto-mode decides to deploy (user approves, or pre-approved auto-shadow):
+
+```
+activate_deployment(roster_entry, cell):
+  1. Read pre-generated config from configs/ directory
+  2. Set stake amount via conviction-weighted sizing (see section below)
+  3. Set dry_run: true (shadow) or false (active, requires user approval)
+  4. freqtrade_start_bot(config_path=<pre-generated config>)
+  5. Update roster.json: cell status → "shadow" or "active"
+  6. Update deployments.json with new deployment entry
+  7. aphexdata_record_event(verb_id="deployment_activated", ...)
+```
+
+**Total time from decision to live bot: < 10 seconds.**
+No file copying, no config editing, no restarts.
+
+### Instant Deactivation
+
+```
+deactivate_deployment(roster_entry, cell):
+  1. freqtrade_stop_bot(strategy=<strategy>, pair=<pair>)
+  2. Update roster.json: cell status → "staged" (back to dormant)
+  3. Update deployments.json lifecycle state
+  4. aphexdata_record_event(verb_id=<transition_verb>, ...)
+```
+
+Does NOT remove the strategy or config. They stay staged for instant
+re-activation if conditions improve.
+
+---
+
+## Conviction-Weighted Position Sizing
+
+Position size is not fixed — it's computed from regime conviction and
+timeframe alignment. This prevents deploying full size into an unconfirmed
+regime flip (e.g., 1h says trend but 4h says compression).
+
+### Formula
+
+```
+position_size = base_stake_pct
+  × (conviction / 100)           ← regime conviction from orderflow
+  × timeframe_alignment_factor   ← see table below
+  × stake_modifier               ← 1.0 active, 0.5 throttled
+  × portfolio_headroom_factor    ← remaining allocation capacity (0-1)
+```
+
+### Timeframe Alignment Factor
+
+| 1h Regime | 4h Regime | Factor | Rationale |
+|-----------|-----------|--------|-----------|
+| Target regime | Target regime | **1.0** | Full alignment, full size |
+| Target regime | Neutral | **0.7** | Partial alignment |
+| Target regime | Opposing | **0.4** | Significant headwind, minimal size |
+| Neutral | Any | **0.3** | Not in target regime |
+
+### Example: ETH 1h TREND_MOMENTUM
+
+```
+Scenario A — 1h: EFFICIENT_TREND conviction 72, 4h: COMPRESSION (opposing)
+  position = 5% × 0.72 × 0.4 × 1.0 × 1.0 = 1.44%
+
+Scenario B — 1h: EFFICIENT_TREND conviction 72, 4h: EFFICIENT_TREND conviction 65
+  position = 5% × 0.72 × 1.0 × 1.0 × 1.0 = 3.6%
+```
+
+The 4h compression cuts the position by 60%. Strategy still deploys but with
+minimal exposure until timeframes align. When the 4h catches up, the next
+check automatically increases the position.
+
+### Position Size Updates
+
+On every 15-minute check, recalculate position size for active/throttled
+deployments. If the new size differs by > 20% from current, adjust via
+`freqtrade_stop_bot()` then `freqtrade_start_bot()` with new stake.
+
+---
+
+## Pre-Approval Configuration (Auto-Shadow)
+
+Allow user to set auto-shadow rules so they don't need to be awake when
+regime flips happen. **Auto-shadow is DRY RUN ONLY.** Moving from shadow
+to active (live capital) ALWAYS requires explicit user approval. No exceptions.
+
+### Config
+
+Add to `config.json`:
+
+```json
+{
+  "auto_shadow_rules": [
+    {
+      "archetype": "TREND_MOMENTUM",
+      "min_composite": 4.0,
+      "min_conviction": 60,
+      "require_tf_alignment": false,
+      "max_auto_shadow": 2,
+      "note": "Auto-shadow up to 2 trend strategies when composite > 4.0"
+    },
+    {
+      "archetype": "MEAN_REVERSION",
+      "min_composite": 4.5,
+      "min_conviction": 50,
+      "require_tf_alignment": true,
+      "max_auto_shadow": 1,
+      "note": "More conservative — require timeframe alignment"
+    }
+  ]
+}
+```
+
+### Matching Logic
+
+When a threshold crossing is detected (see Regime-Flip Fast Path below):
+
+1. Find matching `auto_shadow_rule` for this archetype
+2. Check `composite >= min_composite`
+3. Check `conviction >= min_conviction`
+4. If `require_tf_alignment`: verify both 1h and 4h in target regime
+5. Count current auto-shadowed deployments for this archetype
+6. If count < `max_auto_shadow` → activate in shadow mode (dry_run=true)
+7. Message user with what happened and how to approve for live capital
+
+---
+
 ## Deployment Lifecycle State Machine
 
 ```
@@ -340,19 +530,59 @@ Call `freqtrade_fetch_bot_status()`. Compare running bots against deployment sta
 market_prior.tick_count += 1
 ```
 
-**Step 6: Hourly Regime Refresh (every 4th tick)**
+**Step 6: Hourly Regime Refresh + Regime-Flip Fast Path (every 4th tick)**
 
 If `tick_count % 4 == 0`:
 
-Collect unique pairs from all non-retired deployments. Then:
+Collect unique pairs from all non-retired deployments AND all roster pairs. Then:
 ```
-orderflow_fetch_regime(symbols=[<active_pairs>], horizon="H2_SHORT")
-orderflow_fetch_regime(symbols=[<active_pairs>], horizon="H3_MEDIUM")
+orderflow_fetch_regime(symbols=[<all_pairs>], horizon="H2_SHORT")
+orderflow_fetch_regime(symbols=[<all_pairs>], horizon="H3_MEDIUM")
 ```
 
 Update `market-prior.json` → `regimes` with fresh data and `last_refresh` timestamp.
 
-If no active deployments, skip entirely.
+**Regime-Flip Fast Path — Threshold Crossing Detection:**
+
+After refreshing regime data, immediately re-score affected cells against the
+cell grid. For each cell in `cell-grid-latest.json`:
+
+1. Read previous composite from `market-prior.json` → `previous_composites`
+2. Compute current composite (use new regime data with existing cell grid scores,
+   applying the regime penalty from Step 8 if regime shifted)
+3. If `previous < deploy_threshold` AND `current >= deploy_threshold`:
+   → This is a **threshold crossing event**. Do NOT wait for the next 15-min check.
+
+4. Check `roster.json`: is there a staged deployment for this cell's
+   `archetype + pair + timeframe`?
+
+5. **If staged deployment exists:**
+   - Check `auto_shadow_rules` in `config.json` for a matching archetype rule
+   - If rule matches AND composite >= rule.min_composite AND conviction >= rule.min_conviction:
+     ```
+     activate_deployment(roster_entry, cell) in shadow mode (dry_run=true)
+     send_message: "{pair} {tf} flipped {regime}. Composite {score}.
+       {strategy_name} auto-shadowed (dry-run).
+       Reply 'approve {strategy_name} {pair}' for live capital."
+     ```
+   - If no matching rule or rule conditions not met:
+     ```
+     send_message: "{pair} {tf} flipped {regime}. Composite {score}.
+       {strategy_name} is staged and ready.
+       Reply 'shadow track {strategy_name} {pair} {tf}' to deploy."
+     ```
+
+6. **If no staged deployment:**
+   ```
+   send_message: "{pair} {tf} {archetype} hit {score} but no graduated
+     strategy matches. Consider running triage."
+   ```
+
+7. Save current composites to `market-prior.json` → `previous_composites`
+   for next comparison.
+
+**Critical invariant:** Auto-shadow is ALWAYS dry_run=true. The fast path
+never touches live capital. User must explicitly approve for real money.
 
 **Step 7: Fetch Portfolio DD**
 
@@ -567,6 +797,74 @@ All files at `/workspace/group/auto-mode/`. Create the directory if it doesn't e
 mkdir -p /workspace/group/auto-mode
 ```
 
+### roster.json (Pre-Staged Deployments)
+
+```json
+{
+  "version": 1,
+  "staged_at": "2026-03-26T14:00:00Z",
+  "roster": [
+    {
+      "strategy_name": "AroonMacd_ADX",
+      "strategy_path": "/workspace/group/user_data/strategies/AroonMacd_ADX.py",
+      "archetype": "TREND_MOMENTUM",
+      "validated_pairs": ["ETH/USDT:USDT", "BTC/USDT:USDT"],
+      "timeframe": "1h",
+      "base_stake_pct": 5,
+      "wf_degradation_pct": 18,
+      "graduated_at": "2026-03-26",
+      "cells": [
+        {
+          "pair": "ETH/USDT:USDT",
+          "timeframe": "1h",
+          "config_path": "/workspace/group/auto-mode/configs/AroonMacd_ADX_ETH_1h.json",
+          "status": "staged",
+          "last_activated": null,
+          "last_deactivated": null,
+          "activation_count": 0
+        },
+        {
+          "pair": "BTC/USDT:USDT",
+          "timeframe": "1h",
+          "config_path": "/workspace/group/auto-mode/configs/AroonMacd_ADX_BTC_1h.json",
+          "status": "staged",
+          "last_activated": null,
+          "last_deactivated": null,
+          "activation_count": 0
+        }
+      ]
+    }
+  ],
+  "last_updated": "2026-03-26T14:00:00Z"
+}
+```
+
+### configs/ directory (Pre-Generated FreqTrade Configs)
+
+Each file is a complete, launch-ready FreqTrade config fragment at
+`/workspace/group/auto-mode/configs/{strategy}_{pair}_{tf}.json`:
+
+```json
+{
+  "strategy": "AroonMacd_ADX",
+  "trading_mode": "futures",
+  "margin_mode": "isolated",
+  "stake_currency": "USDT",
+  "dry_run": true,
+  "exchange": {
+    "name": "binance",
+    "pair_whitelist": ["ETH/USDT:USDT"]
+  },
+  "timeframe": "1h",
+  "tradable_balance_ratio": 0.05,
+  "entry_pricing": {"price_side": "other"},
+  "exit_pricing": {"price_side": "other"}
+}
+```
+
+`dry_run` defaults to `true`. Changed to `false` only on user-approved activation.
+`tradable_balance_ratio` is overwritten at activation time by conviction-weighted sizing.
+
 ### deployments.json
 
 ```json
@@ -621,6 +919,11 @@ mkdir -p /workspace/group/auto-mode
     "ETH": {
       "H2_SHORT": {"regime": "TRANQUIL", "conviction": 58, "direction": "NEUTRAL", "fetched_at": "2026-03-25T18:00:00Z"}
     }
+  },
+  "previous_composites": {
+    "BTC/USDT_TREND_MOMENTUM_1h": 3.2,
+    "ETH/USDT_TREND_MOMENTUM_1h": 2.6,
+    "XRP/USDT_MEAN_REVERSION_4h": 2.35
   },
   "recommendations": {
     "opportunities": {
@@ -682,7 +985,16 @@ mkdir -p /workspace/group/auto-mode
   "max_total_capital_usd": 2500,
   "max_daily_new_capital_usd": 1000,
   "max_activations_per_hour": 3,
-  "activation_cooldown_minutes": 5
+  "activation_cooldown_minutes": 5,
+  "auto_shadow_rules": [
+    {
+      "archetype": "TREND_MOMENTUM",
+      "min_composite": 4.0,
+      "min_conviction": 60,
+      "require_tf_alignment": false,
+      "max_auto_shadow": 2
+    }
+  ]
 }
 ```
 
@@ -692,27 +1004,52 @@ If this file doesn't exist, use defaults from the thresholds table above.
 
 ## Quick Command Table
 
+### Deployment Commands
 | User Says | Auto-Mode Does |
 |-----------|---------------|
-| "Show auto-mode status" | Read all state files, display deployment table with states, scores, P&L |
 | "Shadow track BTC TREND_MOMENTUM 1h" | Add deployment entry in SHADOW state |
 | "Shadow track BTC TREND_MOMENTUM 1h using EMA_Cross_v3" | Same, with explicit strategy |
-| "Approve/activate BTC TREND_MOMENTUM 1h" | SHADOW → ACTIVE (starts freqtrade bot) |
+| "Approve/activate BTC TREND_MOMENTUM 1h" | SHADOW → ACTIVE (starts freqtrade bot with conviction-weighted sizing) |
 | "Pause BTC deployment" | Manual ACTIVE/THROTTLED → PAUSED (stops bot) |
 | "Resume BTC deployment" | If composite >= restore_threshold: PAUSED → ACTIVE |
 | "Retire {deployment_id}" | Any → RETIRED (stops bot, removes from rotation) |
-| "Send to research {strategy_name}" | Retire + message: recommend ClawTeam improvement session |
+| "Send to research {strategy_name}" | Retire + recommend ClawTeam improvement session |
+
+### Roster & Staging Commands
+| User Says | Auto-Mode Does |
+|-----------|---------------|
+| "Stage all graduated strategies" | Scan strategy library, populate roster.json, generate configs/ |
+| "Show roster" | List all staged deployments with status per cell |
+| "Simulate deploy {strategy} {pair} {tf}" | Show conviction-weighted sizing without executing |
+| "Show position sizing for {pair}" | Display conviction × alignment × modifier breakdown |
+
+### Pre-Approval Commands
+| User Says | Auto-Mode Does |
+|-----------|---------------|
+| "Pre-approve auto-shadow for TREND_MOMENTUM" | Add auto_shadow_rule (dry-run only) |
+| "Pre-approve auto-shadow for TREND_MOMENTUM min 4.5" | Custom min_composite threshold |
+| "Remove auto-shadow for TREND_MOMENTUM" | Delete the rule |
+| "Show auto-shadow rules" | List active pre-approval rules |
+
+### Monitoring Commands
+| User Says | Auto-Mode Does |
+|-----------|---------------|
+| "Show auto-mode status" | Read all state files, display deployment table with states, scores, P&L |
 | "Run auto-mode check now" | Execute the full 15-step check immediately |
-| "Show opportunities" | Run Step 1 now, list all undeployed high-scoring cells with matching strategies |
-| "Show retirement candidates" | Run Step 2 now, list all deployments meeting retirement criteria |
+| "Show opportunities" | Run Step 1 now, list undeployed high-scoring cells with matching strategies |
+| "Show retirement candidates" | Run Step 2 now, list deployments meeting retirement criteria |
 | "Ignore opportunity {cell}" | Suppress recommendations for this cell for 24 hours |
-| "Show portfolio health" | Display portfolio DD, capital allocation, concentration, circuit breaker status |
+| "Show portfolio health" | Display portfolio DD, capital allocation, concentration, circuit breaker |
+
+### System Commands
+| User Says | Auto-Mode Does |
+|-----------|---------------|
 | "Set threshold deploy=4.0" | Update config.json with new threshold value |
 | "Disable auto-mode" | `pause_task(name="auto_mode_check")` |
 | "Enable auto-mode" | `resume_task(name="auto_mode_check")` |
 | "EMERGENCY STOP" | Confirm token → stop ALL bots, pause scheduler, pause all deployments |
-| "Set auto-mode to dry run" | Write `"dry_run": true` to config.json. All checks run but no freqtrade actions |
-| "Set auto-mode to live" | Write `"dry_run": false` to config.json. Resume freqtrade actions |
+| "Set auto-mode to dry run" | All checks run but no freqtrade actions |
+| "Set auto-mode to live" | Resume freqtrade actions |
 
 ---
 
@@ -733,9 +1070,14 @@ User can say: "Improve {strategy_name} for compression regime" → ClawTeam take
 ### Research → Auto-Mode
 
 When ClawTeam graduates a strategy:
+1. Graduation step adds header tags (`ARCHETYPE`, `GRADUATED`, `VALIDATED_PAIRS`, etc.)
+2. Run "Stage all graduated strategies" to pre-generate configs
+3. Strategy is now in the roster, ready for instant activation
+
 ```
-"{strategy_name} graduated with WF Sharpe 1.1, degradation 18%. Ready for shadow
-deployment. Reply 'shadow track {pair} {archetype} {tf}' to begin monitoring."
+"{strategy_name} graduated with WF Sharpe 1.1, degradation 18%. Staged for
+ETH/USDT 1h, BTC/USDT 1h. Auto-shadow rules will activate when composites cross
+threshold. Or reply 'shadow track {pair} {archetype} {tf}' to deploy now."
 ```
 
 ### Auto-Mode → Analysis Skills
@@ -768,6 +1110,10 @@ When monitoring needs context (during hourly regime refresh):
 | `integrity_violation` | security | state_file | State file checksum mismatch detected |
 | `dry_run_toggled` | config | system | Dry-run mode enabled or disabled |
 | `capital_limit_blocked` | risk | deployment | Activation blocked by capital/rate limit |
+| `roster_staged` | execution | roster | Graduated strategies staged with configs |
+| `regime_flip_detected` | analysis | deployment | Threshold crossing during regime refresh |
+| `auto_shadow_activated` | execution | deployment | Pre-approved auto-shadow triggered |
+| `position_sized` | execution | deployment | Conviction-weighted position calculated |
 
 ---
 
@@ -813,3 +1159,15 @@ supports this — just another `schedule_task`. Deferred until tooling exists.
 
 7. **FALSE CONFIDENCE**: A high composite doesn't mean profit. It means conditions
    are aligned. The score gates whether to run, not whether to bet the farm.
+
+8. **ASSEMBLING AT DEPLOY TIME**: Don't generate configs, copy files, or edit
+   settings when an opportunity arises. Pre-stage everything at graduation time.
+   Deployment should be flipping a switch, not building a switch.
+
+9. **IGNORING TIMEFRAME ALIGNMENT**: A 1h trend signal with a 4h compression
+   is NOT the same conviction as both timeframes aligned. Use the timeframe
+   alignment factor to size positions accordingly.
+
+10. **FULL-SIZE INTO REGIME FLIPS**: A regime that just flipped hasn't proven
+    conviction yet. Conviction-weighted sizing naturally handles this — low
+    conviction = small position. The position grows as conviction builds.

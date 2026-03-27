@@ -89,36 +89,64 @@ npm run dev
 
 ## Phase 4: Verify
 
-### Test status (empty)
-Ask the agent:
+Tests build on each other — run in order.
+
+### Test 1: Status (empty)
 ```
 "Show auto-mode status"
 ```
+Expected: Agent reads empty state files, reports "No active deployments. Auto-mode initialized."
 
-Expected: Agent reads empty/nonexistent state files, reports "No active deployments. Auto-mode initialized."
+### Test 2: Staging
+Tag a strategy with header tags, then:
+```
+"Stage all graduated strategies"
+```
+Expected: roster.json created, config files generated in configs/ directory.
 
-### Test shadow deployment
-Ask the agent:
+### Test 3: Show roster
+```
+"Show roster"
+```
+Expected: Lists all staged deployments with cells and status.
+
+### Test 4: Shadow deployment
 ```
 "Shadow track BTC TREND_MOMENTUM 1h using EMA_Crossover_v3"
 ```
+Expected: Creates deployment entry in deployments.json with state "shadow".
+Roster cell status updates from "staged" to "shadow".
 
-Expected: Agent creates deployment entry in `deployments.json` with state "shadow".
-
-### Test monitoring cycle
-Wait 15 minutes or manually trigger:
+### Test 5: Monitoring cycle
+Wait 15 minutes or:
 ```
 "Run an auto-mode check now"
 ```
+Expected: Reads state, checks cell scores, reports deployment health.
 
-Expected: Agent reads state, checks cell scores, reports deployment health.
-
-### Test opportunity scanning
+### Test 6: Position sizing
 ```
-"Show opportunities"
+"Simulate deploy AroonMacd_ADX ETH 1h"
 ```
+Expected: Shows conviction × alignment × modifier breakdown without executing.
 
-Expected: Agent reads cell grid, finds high-scoring cells without deployments, lists matching strategies.
+### Test 7: Regime-flip fast path
+Edit `cell-grid-latest.json` to set a cell above deploy_threshold. Run check.
+Expected: Threshold crossing detected, staged deployment matched, user notified.
+
+### Test 8: Auto-shadow rules
+```
+"Pre-approve auto-shadow for TREND_MOMENTUM min 4.0"
+```
+Then trigger a threshold crossing. Expected: Bot auto-starts in dry-run mode.
+
+### Test 9: Safety invariants
+Verify:
+- Auto-shadow NEVER starts with dry_run=false
+- "Approve" is the ONLY path to live capital
+- Circuit breaker (DD > 15%) pauses ALL deployments
+- Stale cell-grid blocks new activations
+- Portfolio concentration limits prevent over-deployment
 
 ### Check aphexDATA
 ```
@@ -128,7 +156,9 @@ aphexdata_query_events(verb_id="auto_mode_check", object_type="report", limit=5)
 ### Check state files
 ```bash
 cat /workspace/group/auto-mode/deployments.json
+cat /workspace/group/auto-mode/roster.json
 cat /workspace/group/auto-mode/portfolio.json
+ls /workspace/group/auto-mode/configs/
 ```
 
 ## Troubleshooting
