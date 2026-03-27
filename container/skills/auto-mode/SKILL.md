@@ -225,14 +225,17 @@ When a threshold crossing is detected (see Regime-Flip Fast Path below):
 
 ```
 SHADOW ──user approve──> ACTIVE ──composite < 3.0 (2 checks)──> THROTTLED
-  │                        │                                       │
-  │ score < 2.0 (3x)      │ circuit breaker                       │ composite < 2.0 (3 checks)
-  v                        v                                       v
-RETIRED              ── PAUSED ──────────────────────────────── PAUSED
-                          │                                       │
-                          │ paused > 48h or user command           │
-                          v                                       v
-                        RETIRED                                 RETIRED
+  │  ^                     │                                       │
+  │  │ score >= deploy     │ circuit breaker                       │ composite < 2.0 (3 checks)
+  │  │ threshold (3x)      v                                       v
+  │  └──────────── PAUSED ──────────────────────────────────── PAUSED
+  │ score < 2.0 (3x)  │                                           │
+  v                    │ paused > 48h or user command               │
+RETIRED <──────────────┘───────────────────────────────────────────┘
+  │
+  │ cell composite >= deploy_threshold for 3 consecutive checks
+  v
+SHADOW  (cooldown: 7 days after retirement before eligible)
 ```
 
 ### States
@@ -243,7 +246,7 @@ RETIRED              ── PAUSED ───────────────
 | **ACTIVE** | Live deployment, fully monitored every 15 minutes. | Running | Allowed |
 | **THROTTLED** | Reduced position size (50%). Bot running with reduced stake. | Running (reduced) | Allowed (reduced) |
 | **PAUSED** | Bot stopped. No new trades. Existing positions managed to exit. | Stopped | Blocked |
-| **RETIRED** | Permanently removed. Cannot re-activate without user adding as new shadow. | Stopped | Blocked |
+| **RETIRED** | Removed from rotation. Auto-recovers to SHADOW if cell composite crosses deploy_threshold for 3 consecutive checks after a 7-day cooldown. | Stopped | Blocked |
 
 ### Critical Safety Invariant
 
@@ -635,6 +638,8 @@ For each deployment, evaluate against thresholds:
 | THROTTLED | < pause_threshold | Increment `consecutive_low_checks` | If >= 3 → PAUSED |
 | PAUSED | >= restore_threshold for 4 consecutive | — | Flag as **reactivation-eligible** |
 | PAUSED | age in PAUSED > 48h | — | Flag as **retirement candidate** (Step 2 handles messaging) |
+| RETIRED | >= deploy_threshold for 3 consecutive AND retired > 7 days ago | Increment `consecutive_high_checks` | → SHADOW (message user: "{strategy} re-entering shadow after retirement cooldown") |
+| RETIRED | retired <= 7 days ago | — | Skip (cooldown active) |
 
 **Step 10: Check Portfolio Constraints + Circuit Breaker**
 
@@ -701,6 +706,7 @@ For each transition from Step 11:
 | → PAUSED | `freqtrade_stop_bot(confirm=true)` |
 | → RETIRED | `freqtrade_stop_bot(confirm=true)` |
 | → ACTIVE (restored from throttled) | `freqtrade_stop_bot()` then `freqtrade_start_bot()` with full stake |
+| → SHADOW (from retired, auto-recovery) | No freqtrade action. Reset hysteresis counters. Set `retired_at: null`, `staged_at: now`. Log `aphexdata_record_event(verb_id="retired_recovered")`. |
 
 If any freqtrade call fails, log the error but do NOT roll back state.
 The next tick's reconciliation (Step 4) will detect and retry.
@@ -1155,6 +1161,7 @@ When monitoring needs context (during hourly regime refresh):
 | `paused` | execution | deployment | → PAUSED |
 | `restored` | execution | deployment | THROTTLED/PAUSED → ACTIVE |
 | `retired` | execution | deployment | → RETIRED |
+| `retired_recovered` | execution | deployment | RETIRED → SHADOW (auto-recovery after cooldown) |
 | `circuit_breaker` | risk | portfolio | Portfolio DD > threshold |
 | `circuit_breaker_cleared` | risk | portfolio | Portfolio DD recovered |
 | `opportunity_detected` | analysis | deployment | High-scoring cell with matching strategy |
