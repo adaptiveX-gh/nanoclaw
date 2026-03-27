@@ -171,6 +171,7 @@ export async function spawnWorker(
     isMain: false,
     isScheduledTask: false,
     assistantName: name,
+    model: 'claude-opus-4-6',
   };
 
   logger.info(

@@ -27,6 +27,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  model?: string;
 }
 
 interface ContainerOutput {
@@ -500,9 +501,12 @@ async function runQuery(
 
   let heartbeat: ReturnType<typeof setInterval> | null = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
 
+  log(`Model: ${containerInput.model || 'default (SDK)'}`);
+
   for await (const message of query({
     prompt: stream,
     options: {
+      model: containerInput.model,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,

@@ -21,6 +21,22 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
+const OPUS_PATTERNS = [
+  /research.planner.weekly/i,
+  /clawteam/i,
+  /structural.*mutation/i,
+  /exit.*design|exit.*A\/B/i,
+  /regime.*analysis/i,
+  /indicator.*orthogonality/i,
+];
+
+function resolveModel(prompt: string): string | undefined {
+  for (const pat of OPUS_PATTERNS) {
+    if (pat.test(prompt)) return 'claude-opus-4-6';
+  }
+  return undefined;
+}
+
 /**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
@@ -179,6 +195,7 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
+        model: resolveModel(task.prompt),
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
