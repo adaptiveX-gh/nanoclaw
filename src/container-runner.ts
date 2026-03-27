@@ -255,6 +255,27 @@ function buildVolumeMounts(
     });
   }
 
+  // Bot runner status (read-only — agents read bot status files)
+  const botRunnerBotsDir = path.join(DATA_DIR, 'bot-runner', 'bots');
+  if (fs.existsSync(botRunnerBotsDir)) {
+    mounts.push({
+      hostPath: botRunnerBotsDir,
+      containerPath: '/workspace/extra/bot-runner/bots',
+      readonly: true,
+    });
+  }
+
+  // Bot runner request queue (writable for main group only — agents submit bot requests here)
+  if (isMain) {
+    const botRequestDir = path.join(DATA_DIR, 'bot-runner', 'requests');
+    fs.mkdirSync(botRequestDir, { recursive: true });
+    mounts.push({
+      hostPath: botRequestDir,
+      containerPath: '/workspace/extra/bot-runner/requests',
+      readonly: false,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(

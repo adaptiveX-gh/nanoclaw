@@ -412,6 +412,19 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
     log('MCP: clawteam enabled (main group)');
   }
 
+  // Bot runner: only load for main group when bot-runner dir exists
+  const botRunnerDir = '/workspace/extra/bot-runner';
+  if (containerInput.isMain && fs.existsSync(botRunnerDir)) {
+    servers.botrunner = {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'bot-mcp-stdio.js')],
+      env: {
+        BOT_RUNNER_DIR: botRunnerDir,
+      },
+    };
+    log('MCP: botrunner enabled (main group + bot runner dir exists)');
+  }
+
   // Orderflow: real-time regime + microstructure (no auth required)
   const orderflowUrl = process.env.ORDERFLOW_API_URL || 'https://orderflow.tradev.app';
   servers.orderflow = {

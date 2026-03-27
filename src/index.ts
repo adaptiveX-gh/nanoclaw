@@ -48,6 +48,7 @@ import { cleanupStaleWorkers } from './clawteam-bridge.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSwarmRunner } from './swarm-runner.js';
+import { startBotRunner } from './bot-runner.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -641,6 +642,18 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) {
         logger.warn({ jid }, 'Swarm notification: no channel owns JID');
+        return;
+      }
+      const text = formatOutbound(rawText);
+      if (text) await channel.sendMessage(jid, text);
+    },
+    registeredGroups: () => registeredGroups,
+  });
+  startBotRunner({
+    sendMessage: async (jid, rawText) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'Bot notification: no channel owns JID');
         return;
       }
       const text = formatOutbound(rawText);

@@ -91,7 +91,7 @@ For each .py file in /workspace/group/user_data/strategies/:
 }
 ```
 
-Cell status values: `staged` (ready but dormant), `shadow` (dry-run active),
+Cell status values: `staged` (ready but dormant), `shadow` (paper trading bot running),
 `active` (live capital), `deactivated` (was active, now back to dormant).
 
 ### Instant Activation
@@ -102,28 +102,77 @@ When auto-mode decides to deploy (user approves, or pre-approved auto-shadow):
 activate_deployment(roster_entry, cell):
   1. Read pre-generated config from configs/ directory
   2. Set stake amount via conviction-weighted sizing (see section below)
-  3. Set dry_run: true (shadow) or false (active, requires user approval)
-  4. freqtrade_start_bot(config_path=<pre-generated config>)
-  5. Update roster.json: cell status → "shadow" or "active"
-  6. Update deployments.json with new deployment entry
-  7. aphexdata_record_event(verb_id="deployment_activated", ...)
+  3. bot_start(deployment_id, strategy_name, pair, timeframe)
+     → Bot starts in dry-run mode with signals OFF (initial_state=stopped)
+  4. Update roster.json: cell status → "shadow"
+  5. Update deployments.json with new deployment entry
+  6. aphexdata_record_event(verb_id="deployment_activated", ...)
+  7. Next health check will toggle signals ON/OFF based on composite score
 ```
 
-**Total time from decision to live bot: < 10 seconds.**
-No file copying, no config editing, no restarts.
+**Total time from decision to paper-trading bot: < 30 seconds.**
+No file copying, no config editing. Bot-runner handles config generation and Docker container.
+
+**Promotion to ACTIVE (live capital) — Safe Transition Protocol:**
+
+Promotion is a multi-tick process. A container swap while paper positions are
+open would silently lose them. The protocol ensures the book is flat before
+the swap happens.
+
+```
+promote_deployment(deployment_id):
+
+  TICK 0 — User Approval:
+  1. User approves with confirmation token
+  2. bot_toggle_signals(deployment_id, false) — signals OFF immediately
+  3. Set deployment fields:
+       promotion_approved: true
+       promotion_approved_at: now
+       promotion_signals_off_at: now
+  4. Message: "Promotion approved. Signals OFF — entering cooldown window.
+     Will check for open positions next tick."
+
+  TICK 1+ — Cooldown Check (runs each health check until flat):
+  5. Verify signals have been OFF for >= 1 full check cycle (15 min)
+  6. bot_status(deployment_id) — read open trade count
+  7. If open paper positions > 0:
+       Message: "Promotion waiting — {N} open paper position(s) still closing.
+         Will retry next tick."
+       Do NOT proceed. Leave promotion_approved=true and retry next tick.
+  8. If open paper positions == 0 AND cooldown elapsed:
+
+  TICK N — Execute Swap (only when flat + cooldown met):
+  9.  bot_stop(deployment_id, confirm=true) — remove dry-run container
+  10. bot_start(deployment_id, strategy, pair, tf) with dry_run=false + exchange keys
+  11. bot_toggle_signals(deployment_id, false) — start with signals OFF
+  12. Update deployments.json: state → "active", activated_at → now
+  13. aphexdata_record_event(verb_id="deployment_promoted", ...)
+  14. Next health check controls initial live signal state via composite score
+
+  TIMEOUT — If positions don't close within 4 ticks (1 hour):
+  15. Message: "Promotion stalled — paper positions haven't closed after 1h.
+      Force-exit paper positions? Reply 'force exit {deployment_id}' to proceed,
+      or 'cancel promotion {deployment_id}' to abort."
+```
+
+**Critical invariant:** The live bot starts with signals OFF (Step 11).
+The first health check after promotion evaluates the composite and toggles
+signals ON only if conditions are still favorable. This prevents deploying
+live capital into a regime that shifted during the cooldown window.
 
 ### Instant Deactivation
 
 ```
 deactivate_deployment(roster_entry, cell):
-  1. freqtrade_stop_bot(strategy=<strategy>, pair=<pair>)
+  1. bot_toggle_signals(deployment_id, false) — disable signals (bot stays alive)
+     OR bot_stop(deployment_id, confirm=true) — remove container (for retirement)
   2. Update roster.json: cell status → "staged" (back to dormant)
   3. Update deployments.json lifecycle state
   4. aphexdata_record_event(verb_id=<transition_verb>, ...)
 ```
 
-Does NOT remove the strategy or config. They stay staged for instant
-re-activation if conditions improve.
+Bot containers stay alive in PAUSED state (signals OFF) for instant re-activation.
+Only RETIRED deployments have their containers removed.
 
 ---
 
@@ -224,29 +273,44 @@ When a threshold crossing is detected (see Regime-Flip Fast Path below):
 ## Deployment Lifecycle State Machine
 
 ```
-SHADOW ──user approve──> ACTIVE ──composite < 3.0 (2 checks)──> THROTTLED
-  │  ^                     │                                       │
-  │  │ score >= deploy     │ circuit breaker                       │ composite < 2.0 (3 checks)
-  │  │ threshold (3x)      v                                       v
-  │  └──────────── PAUSED ──────────────────────────────────── PAUSED
-  │ score < 2.0 (3x)  │                                           │
-  v                    │ paused > 48h or user command               │
-RETIRED <──────────────┘───────────────────────────────────────────┘
-  │
-  │ cell composite >= deploy_threshold for 3 consecutive checks
-  v
-SHADOW  (cooldown: 7 days after retirement before eligible)
+SHADOW (paper trading) ──user approve──> ACTIVE ──composite < 3.0 (2 checks)──> THROTTLED
+  │  ^                                     │                                       │
+  │  │ score >= deploy                     │ circuit breaker                       │ composite < 2.0 (3 checks)
+  │  │ threshold (3x)                      v                                       v
+  │  └──────────────────────── PAUSED ──────────────────────────────────────── PAUSED
+  │ score < 2.0 (3x)            ↑ ↓                                               │
+  v                              ↑ ↓ paused > 48h AND was ACTIVE, or user cmd     │
+PAUSED ←─────────────────────    RETIRED <────────────────────────────────────────┘
+  (signals OFF, bot alive)              (container removed, only ex-ACTIVE)
 ```
+
+**Key design principles:**
+1. **SHADOW = paper trading.** A dry-run FreqTrade bot runs continuously. Health checks
+   toggle signals ON/OFF based on composite score. Paper P&L is tracked as validation.
+2. **SHADOW strategies that underperform go to PAUSED** (signals OFF, bot stays alive).
+   Auto-restores when composite recovers. No cooldown, no capital was risked.
+3. **RETIRED is reserved for strategies that traded live capital.** Shadow-only strategies
+   are NEVER retired — they pause and auto-restore.
+
+### Bot Runner Integration
+
+SHADOW and ACTIVE states use the **bot-runner MCP tools** to manage FreqTrade containers:
+- `bot_start(deployment_id, strategy, pair, timeframe)` — start a dry-run FreqTrade container
+- `bot_stop(deployment_id, confirm=true)` — stop and remove container
+- `bot_toggle_signals(deployment_id, enable)` — enable/disable trading signals
+- `bot_status(deployment_id)` — check container status, signals, paper P&L
+- `bot_list()` — list all managed bots
+- `bot_profit(deployment_id)` — read paper trading P&L
 
 ### States
 
-| State | Description | Freqtrade | New Entries |
-|-------|-------------|-----------|-------------|
-| **SHADOW** | Monitoring only, no live capital. Tracks scores as if deployed. Minimum 24h before promotion-eligible. | Not running | N/A |
-| **ACTIVE** | Live deployment, fully monitored every 15 minutes. | Running | Allowed |
-| **THROTTLED** | Reduced position size (50%). Bot running with reduced stake. | Running (reduced) | Allowed (reduced) |
-| **PAUSED** | Bot stopped. No new trades. Existing positions managed to exit. | Stopped | Blocked |
-| **RETIRED** | Removed from rotation. Auto-recovers to SHADOW if cell composite crosses deploy_threshold for 3 consecutive checks after a 7-day cooldown. | Stopped | Blocked |
+| State | Description | FreqTrade Bot | Signals |
+|-------|-------------|---------------|---------|
+| **SHADOW** | Paper trading (dry-run). Bot running, signals toggled by composite score. Paper P&L tracked. Minimum 24h + 6 checks above threshold before promotion-eligible. | Running (dry_run=true) | Toggled by health check |
+| **ACTIVE** | Live deployment. Bot running with real capital. Fully monitored every 15 minutes. | Running (dry_run=false) | Toggled by health check |
+| **THROTTLED** | Reduced position size (50%). Bot running with reduced stake. | Running (reduced) | Active (reduced) |
+| **PAUSED** | Bot container alive but signals OFF. No new trades. Shadow-paused strategies auto-restore when composite recovers (no cooldown). Active-paused strategies require user approval. | Running but signals OFF | OFF |
+| **RETIRED** | Bot container removed. Only reachable from PAUSED for strategies that were previously ACTIVE (traded live capital) and stayed paused > 48h, or via explicit user command. Shadow-only strategies are NEVER retired. | Stopped (container removed) | N/A |
 
 ### Critical Safety Invariant
 
@@ -501,10 +565,12 @@ For each cell where `composite >= 3.5`:
 **Step 2: Retirement Scan**
 
 For each deployment in `deployments.json`:
-1. Look up its cell in `cell-grid-latest.json`
-2. Check retirement criteria (ANY of these triggers a recommendation):
+1. **Skip if shadow-only** — if the deployment was never ACTIVE (no `activated_at` timestamp),
+   it is not eligible for retirement. Shadow-only strategies pause and auto-restore; they never retire.
+2. Look up its cell in `cell-grid-latest.json`
+3. Check retirement criteria (ANY of these triggers a recommendation):
    - `consecutive_low_checks >= 3` AND `last_composite < retire_threshold` (1.5)
-   - State is PAUSED AND time in PAUSED > `paused_retire_hours` (48h)
+   - State is PAUSED AND time in PAUSED > `paused_retire_hours` (48h) AND was previously ACTIVE
    - `total_pnl_pct < pnl_retire_threshold_pct` (-10%)
 3. Check rate limit: recommended in last 24 hours? → Skip
 4. If criteria met → message user:
@@ -537,14 +603,21 @@ If `config.json` exists, merge its values over the defaults above.
 
 **Step 4: Reconcile State vs Reality**
 
-Call `freqtrade_fetch_bot_status()`. Compare running bots against deployment state:
+For each non-retired deployment, check bot-runner status:
+```
+bot_status(deployment_id)
+```
+
+Reconcile against expected state:
 
 | Mismatch | Action |
 |----------|--------|
-| State = "active" but bot not running | Re-start bot OR mark as previous crash (log warning) |
-| Bot running but not in deployments.json | External deployment (market-timing or manual). Add as state=ACTIVE with `reason: "external_detected"` |
-| State = "paused" but bot still running | Previous stop didn't complete. Execute `freqtrade_stop_bot()` now |
-| State = "throttled" but bot not running | Re-start bot with reduced stake |
+| State = SHADOW but no bot running | `bot_start(id, strategy, pair, tf)` — restart paper trading container |
+| State = ACTIVE but no bot running | `bot_start(id, strategy, pair, tf)` with dry_run=false — restart live container |
+| State = SHADOW/ACTIVE, bot running, signals mismatch | `bot_toggle_signals(id, expected_state)` — fix signal state |
+| State = PAUSED but signals active | `bot_toggle_signals(id, false)` — ensure signals OFF |
+| State = THROTTLED but no bot running | `bot_start(id, strategy, pair, tf)` with reduced stake |
+| Bot running but not in deployments.json | External/orphan — log warning, do NOT remove |
 
 **Step 5: Increment Tick Counter**
 
@@ -623,23 +696,32 @@ For each non-retired deployment:
    the cell grid was scored. If regime shifted to an anti-regime for this archetype,
    apply a -1.0 penalty to the composite (capped at 0)
 4. Store `last_composite` on the deployment
+5. If bot is running (SHADOW or ACTIVE), read paper/live P&L:
+   ```
+   bot_profit(deployment_id)
+   ```
+   Store `paper_pnl` (or `live_pnl`) on the deployment for reporting in Step 14.
 
 **Step 9: Apply Hysteresis**
 
 For each deployment, evaluate against thresholds:
 
-| Current State | Composite | Counter Action | Transition |
-|---------------|-----------|----------------|------------|
+| Current State | Composite | Counter Action | Transition / Signal Action |
+|---------------|-----------|----------------|---------------------------|
+| SHADOW (`promotion_approved`) | any | — | **Skip signal toggling.** Signals must stay OFF during promotion cooldown. Run cooldown check instead (see Safe Transition Protocol). |
+| SHADOW | >= deploy_threshold | Reset `consecutive_low_checks` to 0 | `bot_toggle_signals(id, true)` — **signals ON** |
 | SHADOW | >= deploy_threshold for 6+ checks AND age >= 24h | — | Flag as **promotion-eligible** |
-| SHADOW | < pause_threshold for 3 consecutive | Increment | → RETIRED |
+| SHADOW | < deploy_threshold AND >= pause_threshold | — | `bot_toggle_signals(id, false)` — **signals OFF** (below threshold but not pause-worthy) |
+| SHADOW | < pause_threshold | Increment `consecutive_low_checks` | `bot_toggle_signals(id, false)` — signals OFF |
+| SHADOW | < pause_threshold for 3 consecutive | — | → PAUSED (shadow-paused; bot stays alive, signals already OFF). If `promotion_approved`, cancel promotion and clear the flag. |
+| ACTIVE | >= deploy_threshold | Reset `consecutive_low_checks` to 0 | `bot_toggle_signals(id, true)` — signals ON |
 | ACTIVE | < throttle_threshold | Increment `consecutive_low_checks` | If >= 2 → THROTTLED |
 | ACTIVE | >= throttle_threshold | Reset counter to 0 | — |
 | THROTTLED | >= restore_threshold for 2 consecutive | Increment `consecutive_high_checks` | → ACTIVE |
 | THROTTLED | < pause_threshold | Increment `consecutive_low_checks` | If >= 3 → PAUSED |
-| PAUSED | >= restore_threshold for 4 consecutive | — | Flag as **reactivation-eligible** |
-| PAUSED | age in PAUSED > 48h | — | Flag as **retirement candidate** (Step 2 handles messaging) |
-| RETIRED | >= deploy_threshold for 3 consecutive AND retired > 7 days ago | Increment `consecutive_high_checks` | → SHADOW (message user: "{strategy} re-entering shadow after retirement cooldown") |
-| RETIRED | retired <= 7 days ago | — | Skip (cooldown active) |
+| PAUSED (was shadow) | >= deploy_threshold for 3 consecutive | Increment `consecutive_high_checks` | → SHADOW (auto-restore; `bot_toggle_signals(id, true)`) |
+| PAUSED (was active) | >= restore_threshold for 4 consecutive | — | Flag as **reactivation-eligible** (requires user approval) |
+| PAUSED (was active) | age in PAUSED > 48h | — | Flag as **retirement candidate** (Step 2 handles messaging) |
 
 **Step 10: Check Portfolio Constraints + Circuit Breaker**
 
@@ -699,14 +781,18 @@ reconciliation step (Step 4) will detect and complete any pending freqtrade acti
 
 For each transition from Step 11:
 
-| Transition | Freqtrade Action |
-|-----------|-----------------|
-| → ACTIVE (from shadow, user approved) | `freqtrade_start_bot(strategy=<name>, pairs=[pair], timeframe=tf)` |
-| → THROTTLED | Reduce stake: `freqtrade_stop_bot()` then `freqtrade_start_bot()` with `stake_amount * throttle_stake_modifier` |
-| → PAUSED | `freqtrade_stop_bot(confirm=true)` |
-| → RETIRED | `freqtrade_stop_bot(confirm=true)` |
-| → ACTIVE (restored from throttled) | `freqtrade_stop_bot()` then `freqtrade_start_bot()` with full stake |
-| → SHADOW (from retired, auto-recovery) | No freqtrade action. Reset hysteresis counters. Set `retired_at: null`, `staged_at: now`. Log `aphexdata_record_event(verb_id="retired_recovered")`. |
+| Transition | Bot Runner Action |
+|-----------|-------------------|
+| New SHADOW (graduation/staging) | `bot_start(id, strategy, pair, tf)` — starts dry-run container with signals OFF. First health check controls initial signal state. |
+| SHADOW signals ON | `bot_toggle_signals(id, true)` — composite >= deploy_threshold |
+| SHADOW signals OFF | `bot_toggle_signals(id, false)` — composite < deploy_threshold |
+| → ACTIVE (from shadow, user approved) | **Safe Transition Protocol** (multi-tick): signals OFF → cooldown → verify flat → container swap → signals OFF. See "Promotion to ACTIVE" section above. |
+| → THROTTLED | `bot_stop(id, confirm=true)` then `bot_start(id, ...)` with `stake_amount * throttle_stake_modifier` |
+| → PAUSED (from active/throttled) | `bot_toggle_signals(id, false)` — bot stays alive, signals OFF |
+| → PAUSED (from shadow) | `bot_toggle_signals(id, false)` — bot stays alive, signals OFF. Set `paused_at: now`, record `paused_from: "shadow"` in state_history. |
+| → RETIRED | `bot_stop(id, confirm=true)` — container removed. Only for strategies that were ACTIVE. |
+| → ACTIVE (restored from throttled) | `bot_stop(id, confirm=true)` then `bot_start(id, ...)` with full stake |
+| → SHADOW (from paused, auto-restore) | `bot_toggle_signals(id, true)` — re-enable signals. Reset hysteresis counters. Set `paused_at: null`, `staged_at: now`. Log `aphexdata_record_event(verb_id="shadow_restored")`. Message user. |
 
 If any freqtrade call fails, log the error but do NOT roll back state.
 The next tick's reconciliation (Step 4) will detect and retry.
@@ -797,7 +883,7 @@ If the current tick is the 23:47 UTC check (i.e., hour == 23 AND minute == 47):
 For each state transition, also log individually:
 ```
 aphexdata_record_event(
-  verb_id="throttled" | "paused" | "restored" | "retired" | "promoted",
+  verb_id="throttled" | "paused" | "shadow_restored" | "restored" | "retired" | "promoted",
   verb_category="execution",
   object_type="deployment",
   object_id=<deployment_id>,
