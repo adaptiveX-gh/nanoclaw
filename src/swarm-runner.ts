@@ -23,7 +23,10 @@ import { logger } from './logger.js';
 const swarmEnv = readEnvFile(['SWARM_REPORT_DIR', 'FREQSWARM_DIR']);
 
 const POLL_MS = 3000;
-const MAX_CONCURRENT_SWARM_JOBS = 2;
+// Each swarm job uses an in-process SQLite DB; concurrent jobs from separate
+// Python processes can cause race conditions (empty results, corrupt status).
+// Serialize to 1 to keep jobs safe.
+const MAX_CONCURRENT_SWARM_JOBS = 1;
 const SWARM_REPORT_DIR =
   process.env.SWARM_REPORT_DIR ||
   swarmEnv.SWARM_REPORT_DIR ||

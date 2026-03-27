@@ -461,7 +461,26 @@ For each cell where `composite >= 3.5`:
    head -10 /workspace/group/user_data/strategies/*.py 2>/dev/null
    ```
    Look for `# ARCHETYPE: <archetype_name>` in first 10 lines of each `.py` file.
-4. If no matching graduated strategy found → log opportunity but do NOT recommend
+4. If no matching graduated strategy found → **log as missed opportunity**:
+   ```
+   aphexdata_record_event(
+     verb_id="missed_opportunity",
+     verb_category="analysis",
+     object_type="cell",
+     object_id="<pair>_<archetype>_<timeframe>",
+     result_data={
+       "pair": "<pair>",
+       "timeframe": "<timeframe>",
+       "archetype": "<archetype>",
+       "composite_score": <score>,
+       "regime": "<regime>",
+       "conviction": <conviction>,
+       "reason": "no_staged_strategy"
+     }
+   )
+   ```
+   Also append to `/workspace/group/auto-mode/missed-opportunities.json` (rolling buffer,
+   keep last 50 entries only — truncate oldest on each write). AphexDATA is the permanent record.
 5. If match found, check portfolio constraints:
    - Would adding exceed max total deployments (10)?
    - Would it exceed per-archetype limit (3)?
@@ -734,6 +753,40 @@ aphexdata_record_event(
   }
 )
 ```
+
+**Daily Summary (last check of the day — 23:47 UTC tick):**
+
+If the current tick is the 23:47 UTC check (i.e., hour == 23 AND minute == 47):
+
+1. Query all `missed_opportunity` events from today in `missed-opportunities.json`
+2. Compute:
+   - `total_misses`: count of missed opportunities today
+   - `unique_cells`: number of distinct `archetype + pair + timeframe` combos
+   - `top_cells_by_frequency`: top 5 cells that appeared most often
+   - `top_cells_by_score`: top 5 cells with highest average composite score
+   - `archetypes_missing`: list of archetypes with zero staged strategies in `roster.json`
+3. Log:
+   ```
+   aphexdata_record_event(
+     verb_id="missed_opportunity_daily_summary",
+     verb_category="analysis",
+     object_type="report",
+     object_id="missed_opp_summary_<YYYY-MM-DD>",
+     result_data={
+       "date": "<YYYY-MM-DD>",
+       "total_misses": N,
+       "unique_cells": N,
+       "top_cells_by_frequency": [
+         {"pair": "...", "archetype": "...", "timeframe": "...", "count": N, "avg_composite": X.X}
+       ],
+       "top_cells_by_score": [
+         {"pair": "...", "archetype": "...", "timeframe": "...", "avg_composite": X.X, "count": N}
+       ],
+       "archetypes_missing": ["MEAN_REVERSION", "BREAKOUT"]
+     }
+   )
+   ```
+4. Message user with a brief summary only if `total_misses > 0`
 
 For each state transition, also log individually:
 ```
@@ -1040,6 +1093,7 @@ If this file doesn't exist, use defaults from the thresholds table above.
 | "Show retirement candidates" | Run Step 2 now, list deployments meeting retirement criteria |
 | "Ignore opportunity {cell}" | Suppress recommendations for this cell for 24 hours |
 | "Show portfolio health" | Display portfolio DD, capital allocation, concentration, circuit breaker |
+| "Show research priorities" | Query aphexDATA for `missed_opportunity_daily_summary` from last 7 days. Rank cells by `frequency × avg_composite`. Present as prioritized research target list with archetype, pair, timeframe, hit count, avg score. Include which archetypes have zero staged strategies. |
 
 ### System Commands
 | User Says | Auto-Mode Does |
@@ -1114,6 +1168,8 @@ When monitoring needs context (during hourly regime refresh):
 | `regime_flip_detected` | analysis | deployment | Threshold crossing during regime refresh |
 | `auto_shadow_activated` | execution | deployment | Pre-approved auto-shadow triggered |
 | `position_sized` | execution | deployment | Conviction-weighted position calculated |
+| `missed_opportunity` | analysis | cell | High-scoring cell with no staged strategy |
+| `missed_opportunity_daily_summary` | analysis | report | End-of-day summary of missed opportunities |
 
 ---
 
