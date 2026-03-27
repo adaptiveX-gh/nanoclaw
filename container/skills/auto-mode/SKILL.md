@@ -25,7 +25,7 @@ The boundary is sacred: Auto-Mode operates strategies, Research improves them.
 
 | Skill | Purpose |
 |-------|---------|
-| `market-timing` | 140-cell scores (reads `cell-grid-latest.json`) |
+| `market-timing` | 560-cell scores (reads `cell-grid-latest.json`) |
 | `orderflow` | Hourly regime refresh for active pairs |
 | `archetype-taxonomy` | Archetype definitions, thresholds, constraints |
 | `freqtrade-mcp` | Bot status, profit, balance (health monitoring) |

@@ -1,12 +1,12 @@
 # Canonical Strategy Archetype Taxonomy
-# 7 archetypes × 5 pairs × 4 timeframes = 140 cells
+# 7 archetypes × 20 pairs × 4 timeframes = 560 cells
 
 archetypes:
   TREND_MOMENTUM:
     description: "Ride directional moves with momentum confirmation"
     preferred_regimes: [EFFICIENT_TREND]
     anti_regimes: [CHAOS, COMPRESSION]
-    preferred_pairs: [BTC, ETH, SOL]
+    preferred_pairs: [BTC, ETH, SOL, XRP, BNB, ADA, AVAX, LINK, TON, SUI]
     preferred_timeframes: [1h, 4h]
     risk_profile:
       max_drawdown: 0.15
@@ -19,7 +19,7 @@ archetypes:
     description: "Fade extremes in ranging/quiet markets"
     preferred_regimes: [TRANQUIL, COMPRESSION]
     anti_regimes: [EFFICIENT_TREND, CHAOS]
-    preferred_pairs: [BTC, ETH, SOL, XRP, DOGE]
+    preferred_pairs: [BTC, ETH, SOL, XRP, BNB, DOGE, ADA, AVAX, LINK, TON, SUI, DOT, NEAR, UNI, LTC]
     preferred_timeframes: [15m, 1h]
     risk_profile:
       max_drawdown: 0.10
@@ -32,7 +32,7 @@ archetypes:
     description: "Catch regime transitions from compression to trend"
     preferred_regimes: [COMPRESSION]
     anti_regimes: [TRANQUIL, CHAOS]
-    preferred_pairs: [BTC, ETH]
+    preferred_pairs: [BTC, ETH, SOL, XRP, BNB]
     preferred_timeframes: [1h, 4h]
     risk_profile:
       max_drawdown: 0.12
@@ -45,7 +45,7 @@ archetypes:
     description: "Trade within established ranges with tight risk"
     preferred_regimes: [TRANQUIL]
     anti_regimes: [EFFICIENT_TREND, CHAOS]
-    preferred_pairs: [BTC, ETH, SOL, XRP, DOGE]
+    preferred_pairs: [BTC, ETH, SOL, XRP, BNB, DOGE, ADA, AVAX, LINK, TON, SUI, DOT, NEAR, UNI, LTC]
     preferred_timeframes: [15m, 1h]
     risk_profile:
       max_drawdown: 0.08
@@ -58,7 +58,7 @@ archetypes:
     description: "High-frequency small profits in liquid markets"
     preferred_regimes: [EFFICIENT_TREND, TRANQUIL]
     anti_regimes: [CHAOS]
-    preferred_pairs: [BTC, ETH]
+    preferred_pairs: [BTC, ETH, SOL]
     preferred_timeframes: [5m, 15m]
     risk_profile:
       max_drawdown: 0.05
@@ -71,7 +71,7 @@ archetypes:
     description: "Capture funding rate differentials in quiet markets"
     preferred_regimes: [TRANQUIL]
     anti_regimes: [CHAOS, EFFICIENT_TREND]
-    preferred_pairs: [BTC, ETH, SOL, XRP, DOGE]
+    preferred_pairs: [BTC, ETH, SOL, XRP, BNB, DOGE, ADA, AVAX, LINK, TON, SUI, DOT, NEAR, UNI, LTC]
     preferred_timeframes: [4h, 1d]
     risk_profile:
       max_drawdown: 0.06
@@ -84,7 +84,7 @@ archetypes:
     description: "Profit from volatility expansion in chaotic/compressed markets"
     preferred_regimes: [CHAOS, COMPRESSION]
     anti_regimes: [TRANQUIL]
-    preferred_pairs: [BTC, ETH]
+    preferred_pairs: [BTC, ETH, SOL, XRP, BNB]
     preferred_timeframes: [1h, 4h]
     risk_profile:
       max_drawdown: 0.20
@@ -94,12 +94,31 @@ archetypes:
     strategy_tags: [volatility, straddle, gamma, supertrend, atr_expansion]
 
 # Cell grid dimensions
+# Tier 1 (highest liquidity): BTC, ETH, SOL, XRP, BNB
+# Tier 2 (good liquidity):    DOGE, ADA, AVAX, LINK, TON
+# Tier 3 (moderate):          SUI, DOT, SHIB, NEAR, UNI
+# Tier 4 (adequate):          LTC, BCH, APT, ARB, OP
 pairs:
   - BTC
   - ETH
   - SOL
   - XRP
+  - BNB
   - DOGE
+  - ADA
+  - AVAX
+  - LINK
+  - TON
+  - SUI
+  - DOT
+  - SHIB
+  - NEAR
+  - UNI
+  - LTC
+  - BCH
+  - APT
+  - ARB
+  - OP
 
 timeframes:
   - 5m
@@ -107,7 +126,7 @@ timeframes:
   - 1h
   - 4h
 
-# Total cells: 7 archetypes × 5 pairs × 4 timeframes = 140
+# Total cells: 7 archetypes × 20 pairs × 4 timeframes = 560
 
 # Scoring rubric
 scoring:
@@ -153,12 +172,12 @@ scoring:
     deploy_threshold: 3.5
     undeploy_threshold: 2.0
 
-# Portfolio constraints
+# Portfolio constraints (scaled for 20-pair grid)
 portfolio:
-  max_deployments_per_archetype: 3
-  max_deployments_per_pair: 2
-  max_total_deployments: 10
-  max_capital_pct_per_deployment: 0.15
-  max_capital_pct_per_archetype: 0.35
-  max_capital_pct_per_pair: 0.30
+  max_deployments_per_archetype: 5
+  max_deployments_per_pair: 3
+  max_total_deployments: 20
+  max_capital_pct_per_deployment: 0.10
+  max_capital_pct_per_archetype: 0.25
+  max_capital_pct_per_pair: 0.15
   portfolio_dd_circuit_breaker: 0.15

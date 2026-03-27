@@ -1,33 +1,46 @@
 ---
 name: archetype-taxonomy
 description: >
-  Canonical definition of 7 strategy archetypes, 140-cell scoring grid, and portfolio
+  Canonical definition of 7 strategy archetypes, 560-cell scoring grid, and portfolio
   constraints for the Market Timing Agent. Reference this when scoring cells,
   mapping strategies to archetypes, or evaluating deployment readiness.
 ---
 
 # Archetype Taxonomy — Strategy Classification & Cell Scoring
 
-Defines the 7 archetypes, their regime preferences, the 140-cell grid schema (7 × 5 × 4),
+Defines the 7 archetypes, their regime preferences, the 560-cell grid schema (7 × 20 × 4),
 scoring rubrics for regime_fit/execution_fit/net_edge, and portfolio constraints.
 
 ## The 7 Archetypes
 
-| Archetype | Best Regimes | Anti Regimes | Pairs | Timeframes | Strategy Tags |
-|-----------|-------------|-------------|-------|------------|---------------|
-| **TREND_MOMENTUM** | EFFICIENT_TREND | CHAOS, COMPRESSION | BTC, ETH, SOL | 1h, 4h | trend_following, momentum, ema_crossover |
-| **MEAN_REVERSION** | TRANQUIL, COMPRESSION | EFFICIENT_TREND, CHAOS | All 5 | 15m, 1h | mean_reversion, rsi, bollinger |
-| **BREAKOUT** | COMPRESSION | TRANQUIL, CHAOS | BTC, ETH | 1h, 4h | breakout, donchian, range_breakout |
-| **RANGE_BOUND** | TRANQUIL | EFFICIENT_TREND, CHAOS | All 5 | 15m, 1h | range, support_resistance, grid |
-| **SCALPING** | EFFICIENT_TREND, TRANQUIL | CHAOS | BTC, ETH | 5m, 15m | scalping, micro_trend |
-| **CARRY_FUNDING** | TRANQUIL | CHAOS, EFFICIENT_TREND | All 5 | 4h, 1d | carry, funding_rate, basis_trade |
-| **VOLATILITY_HARVEST** | CHAOS, COMPRESSION | TRANQUIL | BTC, ETH | 1h, 4h | volatility, supertrend, atr_expansion |
+| Archetype | Best Regimes | Anti Regimes | Preferred Pairs | Timeframes | Strategy Tags |
+|-----------|-------------|-------------|-----------------|------------|---------------|
+| **TREND_MOMENTUM** | EFFICIENT_TREND | CHAOS, COMPRESSION | T1+T2 (10) | 1h, 4h | trend_following, momentum, ema_crossover |
+| **MEAN_REVERSION** | TRANQUIL, COMPRESSION | EFFICIENT_TREND, CHAOS | T1+T2+T3 (15) | 15m, 1h | mean_reversion, rsi, bollinger |
+| **BREAKOUT** | COMPRESSION | TRANQUIL, CHAOS | T1 (5) | 1h, 4h | breakout, donchian, range_breakout |
+| **RANGE_BOUND** | TRANQUIL | EFFICIENT_TREND, CHAOS | T1+T2+T3 (15) | 15m, 1h | range, support_resistance, grid |
+| **SCALPING** | EFFICIENT_TREND, TRANQUIL | CHAOS | BTC, ETH, SOL | 5m, 15m | scalping, micro_trend |
+| **CARRY_FUNDING** | TRANQUIL | CHAOS, EFFICIENT_TREND | T1+T2+T3 (15) | 4h, 1d | carry, funding_rate, basis_trade |
+| **VOLATILITY_HARVEST** | CHAOS, COMPRESSION | TRANQUIL | T1 (5) | 1h, 4h | volatility, supertrend, atr_expansion |
+
+## Pair Tiers
+
+| Tier | Pairs | Liquidity | Notes |
+|------|-------|-----------|-------|
+| **T1** | BTC, ETH, SOL, XRP, BNB | Highest | All archetypes viable |
+| **T2** | DOGE, ADA, AVAX, LINK, TON | Good | Most archetypes except scalping |
+| **T3** | SUI, DOT, SHIB, NEAR, UNI | Moderate | Trend, range, mean-reversion, carry |
+| **T4** | LTC, BCH, APT, ARB, OP | Adequate | Wider spreads, execution_fit naturally lower |
+
+All 20 pairs appear in the grid. Execution_fit scoring handles liquidity — low-liquidity pairs
+get lower execution_fit scores, which keeps composites below deploy threshold for archetypes
+that need tight spreads. Preferred_pairs is advisory guidance for research prioritization.
 
 ## Cell Grid
 
-**Dimensions:** 7 archetypes × 5 pairs × 4 timeframes = **140 cells**
+**Dimensions:** 7 archetypes × 20 pairs × 4 timeframes = **560 cells**
 
-**Pairs:** BTC, ETH, SOL, XRP, DOGE
+**Pairs:** BTC, ETH, SOL, XRP, BNB, DOGE, ADA, AVAX, LINK, TON, SUI, DOT, SHIB, NEAR, UNI, LTC, BCH, APT, ARB, OP
 **Timeframes:** 5m, 15m, 1h, 4h
 
 Each cell stores:
@@ -119,12 +132,12 @@ composite = (regime_fit × 0.4) + (execution_fit × 0.25) + (net_edge × 0.35)
 
 | Constraint | Limit |
 |------------|-------|
-| Max deployments per archetype | 3 |
-| Max deployments per pair | 2 |
-| Max total active deployments | 10 |
-| Max capital % per single deployment | 15% |
-| Max capital % per archetype | 35% |
-| Max capital % per pair | 30% |
+| Max deployments per archetype | 5 |
+| Max deployments per pair | 3 |
+| Max total active deployments | 20 |
+| Max capital % per single deployment | 10% |
+| Max capital % per archetype | 25% |
+| Max capital % per pair | 15% |
 | Portfolio DD circuit breaker | 15% — pause ALL new deployments |
 
 ## Mapping Strategies to Archetypes

@@ -1,7 +1,7 @@
 ---
 name: market-timing
 description: >
-  Market Timing Agent — scores 140 cells (7 archetypes × 5 pairs × 4 timeframes) with
+  Market Timing Agent — scores 560 cells (7 archetypes × 20 pairs × 4 timeframes) with
   regime_fit, execution_fit, net_edge subscores (0–6 scale), produces deployment rotation
   plans, and manages portfolio-level risk. Orchestrates orderflow, macro-sentiment,
   onchain-intel, ct-sentiment, archetype-taxonomy, freqtrade-mcp, freqswarm, and aphexdata
@@ -11,8 +11,8 @@ description: >
 
 # Market Timing Agent — Orchestration Workflow
 
-Scores 140 cells, compares against current deployments, produces rotation plans, and
-logs all decisions to aphexDATA.
+Scores 560 cells (7 archetypes × 20 pairs × 4 timeframes), compares against current
+deployments, produces rotation plans, and logs all decisions to aphexDATA.
 
 ## Dependencies
 
@@ -42,11 +42,11 @@ cat /workspace/skills/archetype-taxonomy/archetypes.yaml
 orderflow_scan_opportunities(min_conviction=0)
 ```
 This returns regime + conviction for all 22 tracked symbols across all 5 horizons.
-Filter to the 5 pairs (BTC, ETH, SOL, XRP, DOGE) and the relevant horizons.
+Filter to the 20 grid pairs and the relevant horizons.
 
 **1c. Fetch microstructure for all pairs**
 ```
-orderflow_fetch_microstructure(symbols=["BTC", "ETH", "SOL", "XRP", "DOGE"])
+orderflow_fetch_microstructure(symbols=["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "AVAX", "LINK", "TON", "SUI", "DOT", "SHIB", "NEAR", "UNI", "LTC", "BCH", "APT", "ARB", "OP"])
 ```
 
 **1d. Read context reports (if available)**
@@ -62,7 +62,7 @@ cat /workspace/group/reports/sentiment-latest.json 2>/dev/null || echo "{}"
 cat /workspace/group/reports/cell-grid-latest.json 2>/dev/null || echo "[]"
 ```
 
-### Phase 2: Score All 140 Cells
+### Phase 2: Score All 560 Cells
 
 For each cell `(archetype, pair, timeframe)`:
 
@@ -129,17 +129,17 @@ If macro context reports are available:
 
 ### Phase 3: Rank & Apply Portfolio Constraints
 
-**3a. Sort all 140 cells by composite score (descending)**
+**3a. Sort all 560 cells by composite score (descending)**
 
 **3b. Apply portfolio constraints (from archetypes.yaml)**
 
 Walk through cells top-down. For each cell scoring above deploy threshold (3.5):
-- Check: max 3 deployments per archetype
-- Check: max 2 deployments per pair
-- Check: max 10 total deployments
-- Check: max 15% capital per deployment
-- Check: max 35% capital per archetype
-- Check: max 30% capital per pair
+- Check: max 5 deployments per archetype
+- Check: max 3 deployments per pair
+- Check: max 20 total deployments
+- Check: max 10% capital per deployment
+- Check: max 25% capital per archetype
+- Check: max 15% capital per pair
 
 **3c. Check portfolio circuit breaker**
 
@@ -203,7 +203,7 @@ For each current deployment NOT in the target list:
 
 **6a. Save cell grid snapshot**
 ```bash
-# Write the full 140-cell grid with scores to workspace
+# Write the full 560-cell grid with scores to workspace
 cat > /workspace/group/reports/cell-grid-latest.json << 'EOF'
 [... full grid ...]
 EOF
@@ -221,7 +221,7 @@ aphexdata_record_event(
   object_type="report",
   object_id="market_timing_YYYY-MM-DD_HH",
   result_data={
-    "cells_scored": 140,
+    "cells_scored": 560,
     "cells_above_deploy": <count>,
     "cells_above_undeploy": <count>,
     "actions_deploy": <count>,
@@ -260,7 +260,7 @@ The Market Timing scoring cycle should run every 4 hours as a scheduled task:
 schedule_task(
   name: "market_timing_cycle",
   schedule: "0 */4 * * *",
-  prompt: "Run a full Market Timing scoring cycle: score all 140 cells, compare against current deployments, generate rotation plan, execute approved actions, and log everything to aphexDATA."
+  prompt: "Run a full Market Timing scoring cycle: score all 560 cells (7 archetypes × 20 pairs × 4 timeframes), compare against current deployments, generate rotation plan, execute approved actions, and log everything to aphexDATA."
 )
 ```
 
@@ -268,7 +268,7 @@ schedule_task(
 
 | Request | What Happens |
 |---------|-------------|
-| "Score all cells" | Phase 1–2 only: gather data, score 140 cells, report |
+| "Score all cells" | Phase 1–2 only: gather data, score 560 cells, report |
 | "Run scoring cycle" | Full Phase 1–6: score, diff, plan, execute, log |
 | "What should we deploy?" | Phase 1–4: score + diff + rotation plan (no execution) |
 | "Rebalance deployments" | Phase 1–6 with emphasis on portfolio constraints |
@@ -282,7 +282,7 @@ After each scoring cycle, send a summary message:
 ```markdown
 ## Market Timing — Scoring Cycle Report
 **Time:** YYYY-MM-DD HH:MM UTC
-**Cells scored:** 140 | **Above deploy:** N | **Above undeploy:** N
+**Cells scored:** 560 | **Above deploy:** N | **Above undeploy:** N
 
 ### Top 5 Cells
 | Archetype | Pair | TF | Regime | R-Fit | E-Fit | Edge | Comp | Action |
@@ -295,6 +295,6 @@ After each scoring cycle, send a summary message:
 - HOLD: N strategies
 
 ### Portfolio
-- Active: N/10 | Capital: N% | DD: N%
+- Active: N/20 | Capital: N% | DD: N%
 - Circuit breaker: OFF
 ```
