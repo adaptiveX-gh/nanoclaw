@@ -4,6 +4,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
   TIMEZONE,
@@ -31,6 +32,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getDb,
   getMessagesSince,
   getNewMessages,
   getRegisteredGroup,
@@ -49,6 +51,7 @@ import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSwarmRunner } from './swarm-runner.js';
 import { startBotRunner } from './bot-runner.js';
+import { startConsoleSync } from './console-sync.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -667,6 +670,7 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
   });
+  startConsoleSync(getDb(), DATA_DIR);
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
