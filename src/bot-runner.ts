@@ -128,7 +128,8 @@ let healthCheckTimer: ReturnType<typeof setInterval> | undefined;
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function generatePassword(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const chars =
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let result = '';
   for (let i = 0; i < 24; i++) {
     result += chars[Math.floor(Math.random() * chars.length)];
@@ -185,7 +186,10 @@ function loadPortMap(): void {
   }
 }
 
-function writeBotStatus(bot: BotInstance, extra?: Partial<BotStatusFile>): void {
+function writeBotStatus(
+  bot: BotInstance,
+  extra?: Partial<BotStatusFile>,
+): void {
   const statusFile: BotStatusFile = {
     deployment_id: bot.deploymentId,
     status: bot.status,
@@ -223,7 +227,9 @@ function ftApiCall(
   password: string,
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const auth = Buffer.from(`${FT_API_USERNAME}:${password}`).toString('base64');
+    const auth = Buffer.from(`${FT_API_USERNAME}:${password}`).toString(
+      'base64',
+    );
     const req = http.request(
       {
         hostname: '127.0.0.1',
@@ -500,7 +506,9 @@ async function toggleBotSignals(
   }
 
   if (bot.status !== 'running') {
-    throw new Error(`Bot ${deploymentId} is ${bot.status}, cannot toggle signals`);
+    throw new Error(
+      `Bot ${deploymentId} is ${bot.status}, cannot toggle signals`,
+    );
   }
 
   const endpoint = enable ? 'start' : 'stop';
@@ -514,10 +522,7 @@ async function toggleBotSignals(
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error(
-      { deploymentId, err: msg },
-      'Failed to toggle bot signals',
-    );
+    logger.error({ deploymentId, err: msg }, 'Failed to toggle bot signals');
     throw new Error(`Failed to toggle signals: ${msg}`);
   }
 }
@@ -620,10 +625,7 @@ async function processRequest(requestFile: string): Promise<void> {
           deployment_id: req.deployment_id,
           stopped_at: new Date().toISOString(),
         });
-        notifyUser(
-          chatJid,
-          `FreqTrade bot stopped: ${req.deployment_id}`,
-        );
+        notifyUser(chatJid, `FreqTrade bot stopped: ${req.deployment_id}`);
         break;
       }
 
@@ -747,10 +749,7 @@ function recoverExistingBots(): void {
 
     if (containers.length > 0) {
       savePortMap();
-      logger.info(
-        { recovered: activeBots.size },
-        'Bot recovery complete',
-      );
+      logger.info({ recovered: activeBots.size }, 'Bot recovery complete');
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to recover existing bot containers');
@@ -812,10 +811,7 @@ function pollRequests(): void {
 
     for (const file of files) {
       processRequest(file).catch((err) => {
-        logger.error(
-          { err, file },
-          'Unhandled error processing bot request',
-        );
+        logger.error({ err, file }, 'Unhandled error processing bot request');
       });
     }
   } catch (err) {

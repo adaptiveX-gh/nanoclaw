@@ -215,17 +215,13 @@ function ensureSwarmConfig(groupFolder: string, specPath: string): string {
     try {
       const cfg = JSON.parse(fs.readFileSync(swarmConfigPath, 'utf-8'));
       let patched = false;
-      if (
-        cfg.entry_pricing?.price_side &&
-        cfg.entry_pricing.price_side !== 'other'
-      ) {
+      if (!cfg.entry_pricing) cfg.entry_pricing = {};
+      if (cfg.entry_pricing.price_side !== 'other') {
         cfg.entry_pricing.price_side = 'other';
         patched = true;
       }
-      if (
-        cfg.exit_pricing?.price_side &&
-        cfg.exit_pricing.price_side !== 'other'
-      ) {
+      if (!cfg.exit_pricing) cfg.exit_pricing = {};
+      if (cfg.exit_pricing.price_side !== 'other') {
         cfg.exit_pricing.price_side = 'other';
         patched = true;
       }

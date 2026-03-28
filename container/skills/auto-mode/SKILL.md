@@ -306,7 +306,7 @@ SHADOW and ACTIVE states use the **bot-runner MCP tools** to manage FreqTrade co
 
 | State | Description | FreqTrade Bot | Signals |
 |-------|-------------|---------------|---------|
-| **SHADOW** | Paper trading (dry-run). Bot running, signals toggled by composite score. Paper P&L tracked. Minimum 24h + 6 checks above threshold before promotion-eligible. | Running (dry_run=true) | Toggled by health check |
+| **SHADOW** | Paper trading (dry-run). Bot running, signals toggled by composite score. Paper P&L tracked. Minimum shadow period before promotion-eligible is determined by `shadow_minimum_matrix[archetype][timeframe]` (default 24h) + `shadow_minimum_checks_matrix[timeframe]` checks above threshold (default 6). | Running (dry_run=true) | Toggled by health check |
 | **ACTIVE** | Live deployment. Bot running with real capital. Fully monitored every 15 minutes. | Running (dry_run=false) | Toggled by health check |
 | **THROTTLED** | Reduced position size (50%). Bot running with reduced stake. | Running (reduced) | Active (reduced) |
 | **PAUSED** | Bot container alive but signals OFF. No new trades. Shadow-paused strategies auto-restore when composite recovers (no cooldown). Active-paused strategies require user approval. | Running but signals OFF | OFF |
@@ -330,8 +330,8 @@ pause, retire) happen automatically based on scores and hysteresis.
 | `retire_threshold` | 1.5 | Below this for 3 checks → retire |
 | `circuit_breaker_dd_pct` | 15% | Portfolio DD → pause ALL |
 | `circuit_breaker_recovery_dd_pct` | 10% | DD recovery → allow re-approval |
-| `shadow_minimum_hours` | 24 | Minimum time before promotion-eligible |
-| `shadow_minimum_checks_above_threshold` | 6 | Minimum checks above deploy_threshold |
+| `shadow_minimum_hours` | 24 | Default minimum shadow time. Overridden by `shadow_minimum_matrix[archetype][timeframe]` in config.json if present. |
+| `shadow_minimum_checks_above_threshold` | 6 | Default minimum checks. Overridden by `shadow_minimum_checks_matrix[timeframe]` in config.json if present. |
 | `throttle_stake_modifier` | 0.5 | Position size multiplier when throttled |
 | `throttle_consecutive_checks` | 2 | Checks below throttle_threshold to trigger |
 | `pause_consecutive_checks` | 3 | Checks below pause_threshold to trigger |
@@ -340,6 +340,40 @@ pause, retire) happen automatically based on scores and hysteresis.
 | `pnl_retire_threshold_pct` | -10 | P&L since deploy → retirement candidate |
 
 Users can override any threshold via `/workspace/group/auto-mode/config.json`.
+
+### Shadow Minimum Matrix
+
+The flat `shadow_minimum_hours` and `shadow_minimum_checks_above_threshold` defaults
+are designed for 1h strategies. For other timeframes, use the 2D matrix from config.json:
+
+**Lookup procedure (used in Step 9):**
+```
+shadow_hours = config.shadow_minimum_matrix?.[archetype]?.[timeframe]
+  ?? config.shadow_minimum_hours ?? 24
+
+shadow_checks = config.shadow_minimum_checks_matrix?.[timeframe]
+  ?? config.shadow_minimum_checks_above_threshold ?? 6
+```
+
+**Rationale:**
+- Low TF (5m/15m): sees many regime cycles quickly → shorter minimum, but more checks needed
+- High TF (4h/1d): fewer candles per day → longer minimum, fewer checks sufficient
+- Archetype modifies further: trend strategies need longer confirmation than scalp/range
+
+| | 5m | 15m | 1h | 4h | 1d |
+|---|---|---|---|---|---|
+| SCALP/RANGE | 4h | 6h | 12h | 24h | 48h |
+| MEAN_REVERSION | 6h | 8h | 18h | 36h | 72h |
+| TREND/MOMENTUM | 8h | 12h | **24h** | 48h | 96h |
+| MULTI_FACTOR/BREAKOUT | 6h | 10h | 20h | 40h | 80h |
+
+| Timeframe | Min checks |
+|---|---|
+| 5m | 24 |
+| 15m | 16 |
+| 1h | 6 |
+| 4h | 4 |
+| 1d | 3 |
 
 ---
 
@@ -710,7 +744,7 @@ For each deployment, evaluate against thresholds:
 |---------------|-----------|----------------|---------------------------|
 | SHADOW (`promotion_approved`) | any | — | **Skip signal toggling.** Signals must stay OFF during promotion cooldown. Run cooldown check instead (see Safe Transition Protocol). |
 | SHADOW | >= deploy_threshold | Reset `consecutive_low_checks` to 0 | `bot_toggle_signals(id, true)` — **signals ON** |
-| SHADOW | >= deploy_threshold for 6+ checks AND age >= 24h | — | Flag as **promotion-eligible** |
+| SHADOW | >= deploy_threshold for N+ checks AND age >= Mh | — | Flag as **promotion-eligible**. M = `shadow_minimum_matrix[archetype][tf]` ?? 24h. N = `shadow_minimum_checks_matrix[tf]` ?? 6. |
 | SHADOW | < deploy_threshold AND >= pause_threshold | — | `bot_toggle_signals(id, false)` — **signals OFF** (below threshold but not pause-worthy) |
 | SHADOW | < pause_threshold | Increment `consecutive_low_checks` | `bot_toggle_signals(id, false)` — signals OFF |
 | SHADOW | < pause_threshold for 3 consecutive | — | → PAUSED (shadow-paused; bot stays alive, signals already OFF). If `promotion_approved`, cancel promotion and clear the flag. |
@@ -1117,6 +1151,7 @@ Each file is a complete, launch-ready FreqTrade config fragment at
   "circuit_breaker_recovery_dd_pct": 10,
   "shadow_minimum_hours": 24,
   "shadow_minimum_checks_above_threshold": 6,
+  "_note_shadow_matrix": "shadow_minimum_matrix and shadow_minimum_checks_matrix in config.json override these per archetype×timeframe.",
   "throttle_consecutive_checks": 2,
   "pause_consecutive_checks": 3,
   "restore_consecutive_checks": 2,

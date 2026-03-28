@@ -272,6 +272,24 @@ For each campaign in "planned" state:
 ### Step 7: Trigger research
 
 ```
+Pre-flight — verify swarm before spending budget:
+  health = swarm_health()
+  if health.swarm_likely_broken:
+    Message user: "Swarm appears broken ({health.consecutive_failures} recent failures).
+      Skipping campaign submission until swarm recovers."
+    Skip all campaign submissions this cycle (leave in "seeded" state)
+    return
+
+  If no successful swarm job in the last 24 hours:
+    selftest_run_id = swarm_selftest()
+    Poll selftest_run_id with swarm_poll_run (max 5 min, poll every 30s)
+    if selftest failed:
+      Message user: "Selftest failed — swarm pipeline not operational.
+        Investigate with swarm_health(). Skipping campaign submissions."
+      Log: aphexdata_record_event(verb_id="research_selftest_failed", ...)
+      Skip all campaign submissions this cycle
+      return
+
 For each campaign in "seeded" state, within weekly budget:
   Build AutoresearchSpec:
   {
@@ -339,6 +357,16 @@ PART 5: POLL PROCEDURE (6-HOURLY)
 
 Scheduled: `0 */6 * * *` (every 6 hours).
 
+### Step 0: Swarm health gate
+
+```
+health = swarm_health()
+if health.swarm_likely_broken:
+  Log: "Swarm broken — skipping poll cycle. Running auto-retry check only."
+  → Only run Step 1b (auto-retry eligibility check) — skip Steps 1-7
+  return after Step 1b
+```
+
 ### Step 1: Check active research
 
 ```
@@ -349,7 +377,53 @@ For each campaign in "researching" state:
       full_results = swarm_job_results(run_id)
       Process keepers (Step 2)
     if result.status == "failed":
-      Log error, check if retries available
+      Log: aphexdata_record_event(verb_id="research_run_failed", ...)
+      Run auto-retry check (Step 1b)
+```
+
+### Step 1b: Auto-retry failed runs on swarm recovery
+
+When a campaign's run has failed, check if the swarm has recovered and retry
+automatically. This prevents campaigns from stalling indefinitely after
+transient infrastructure issues.
+
+```
+For each campaign in "researching" state with ALL run_ids in "failed" status:
+  1. Check retry cap:
+     if campaign.research.retry_count >= 3:
+       Log: "Campaign {id} exceeded max retries (3)."
+       if campaign.research.best_sharpe >= (fitness_targets.min_wf_sharpe × 0.9):
+         → state: "near_miss" (Step 4)
+       else:
+         → state: "abandoned"
+       Log: aphexdata_record_event(verb_id="research_abandoned", reason="max_retries")
+       continue
+
+  2. Check swarm health:
+     health = swarm_health()  (may already have from Step 0)
+     if health.swarm_likely_broken:
+       Log: "Swarm still broken — skipping retry for {campaign_id}"
+       continue
+
+  3. Run selftest before retrying:
+     selftest_run_id = swarm_selftest()
+     Poll selftest_run_id with swarm_poll_run (max 5 min, poll every 30s)
+     if selftest failed:
+       Log: "Selftest failed — swarm not healthy, deferring retry"
+       continue
+
+  4. Re-submit autoresearch:
+     Rebuild AutoresearchSpec from campaign.seeding (same as Step 7 in Part 4)
+     Include updated discard_hashes from swarm_autoresearch_history
+     run_id = swarm_trigger_autoresearch(spec, workers=4, priority="normal")
+     Append run_id to campaign.research.run_ids[]
+     Increment campaign.research.retry_count
+     Update campaign.updated_at
+     Log: aphexdata_record_event(verb_id="research_retried", result_data={
+       campaign_id, retry_count, previous_run_id, new_run_id, reason: "swarm_recovery"
+     })
+     Message user: "🔄 Campaign {campaign_id} ({archetype}): retrying after swarm
+       recovery (attempt {retry_count}/3). New run: {run_id}"
 ```
 
 ### Step 2: Check for keepers
@@ -540,6 +614,7 @@ All files at `/workspace/group/research-planner/`. Directory created on first ru
         "run_ids": ["ar_20260326_abc"],
         "rounds_used": 1,
         "max_rounds": 4,
+        "retry_count": 0,
         "keepers": [],
         "rejects_count": 7,
         "best_sharpe": 0.35,
@@ -674,6 +749,9 @@ PART 9: APHEXDATA EVENT CONVENTIONS
 | `research_stalled` | analysis | campaign | Budget exhausted, no keepers at all |
 | `research_abandoned` | execution | campaign | Campaign abandoned (manual or auto) |
 | `research_weekly_plan` | analysis | report | Weekly planning cycle summary |
+| `research_run_failed` | analysis | campaign | Individual autoresearch run failed |
+| `research_retried` | execution | campaign | Failed run auto-retried after swarm recovery |
+| `research_selftest_failed` | analysis | report | Swarm selftest failed before campaign submission |
 | `nova_scan_completed` | analysis | report | Nova strategy classification batch done |
 
 All events include `result_data` with campaign_id, archetype, and relevant
