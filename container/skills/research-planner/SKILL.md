@@ -180,11 +180,13 @@ attempts → campaign `deferred`.
 
 
 ═══════════════════════════════════════════════════════════════════════
-PART 4: WEEKLY PLANNING CYCLE
+PART 4: DAILY PLANNING CYCLE
 ═══════════════════════════════════════════════════════════════════════
 
-Scheduled: `0 3 * * 1` (Monday 03:00 UTC).
+Scheduled: `0 3 * * *` (daily 03:00 UTC).
 Can also be triggered manually: "Run research planner".
+Budget caps remain weekly (reset Monday 03:00 UTC) — daily runs just
+react faster to new gaps without increasing total spend.
 
 ### Step 1: Read missed opportunity data
 
@@ -320,14 +322,14 @@ For each campaign in "seeded" state, within weekly budget:
 
 ```
 Write campaigns.json to .tmp file first, then rename (atomic).
-Write weekly-plan-latest.json with cycle summary.
+Write plan-latest.json with cycle summary.
 ```
 
 ### Step 9: Log + message user
 
 ```
 aphexdata_record_event(
-  verb_id="research_weekly_plan",
+  verb_id="research_daily_plan",
   verb_category="analysis",
   object_type="report",
   result_data={
@@ -341,7 +343,7 @@ aphexdata_record_event(
 )
 
 Message user (only if there's something to report):
-"## Research Planner — Weekly Update
+"## Research Planner — Daily Update
 **Active campaigns:** {N} ({list of archetypes})
 **New campaigns:** {N}
 **Graduated this week:** {N}
@@ -352,10 +354,10 @@ Message user (only if there's something to report):
 
 
 ═══════════════════════════════════════════════════════════════════════
-PART 5: POLL PROCEDURE (6-HOURLY)
+PART 5: POLL PROCEDURE (4-HOURLY)
 ═══════════════════════════════════════════════════════════════════════
 
-Scheduled: `0 */6 * * *` (every 6 hours).
+Scheduled: `0 */4 * * *` (every 4 hours, aligned with market-timing cycle).
 
 ### Step 0: Swarm health gate
 
@@ -531,7 +533,7 @@ PART 6: BUDGET MANAGEMENT
 | **Normal** | 3 | 1 | 10 | 2 |
 
 **Cold-start mode** is active when ANY archetype has zero graduated strategies
-in the roster. The planner checks roster.json on every weekly cycle. Once all 7
+in the roster. The planner checks roster.json on every daily cycle. Once all 7
 archetypes have ≥1 graduated strategy, it drops to normal budget automatically.
 
 ### Per-Campaign Caps
@@ -560,7 +562,7 @@ Budget counters are stored in `campaigns.json` under a top-level `budget` key:
 }
 ```
 
-Budget resets every Monday at 03:00 UTC (start of weekly planning cycle).
+Budget resets every Monday at 03:00 UTC (planning runs daily but budget is weekly).
 
 If budget is exhausted mid-week, campaigns queue in `seeded` state until the
 next reset. The planner does NOT overspend.
@@ -701,9 +703,9 @@ All files at `/workspace/group/research-planner/`. Directory created on first ru
 
 Defaults above are used if config.json doesn't exist or omits a key.
 
-### weekly-plan-latest.json
+### plan-latest.json
 
-Written at end of each weekly cycle. Used by "Show research status" command.
+Written at end of each daily planning cycle. Used by "Show research status" command.
 
 ```json
 {
@@ -734,7 +736,7 @@ PART 8: COMMAND TABLE
 | "Show research priorities" | Query last 7 days of `missed_opportunity_daily_summary` from aphexDATA + read `missed-opportunities.json`. Rank cells by `hit_count × avg_composite`. Display table: archetype, pair, timeframe, hit count, avg composite, campaign state (if exists). Highlight archetypes with zero staged strategies in roster. |
 | "Show research status" | Read `campaigns.json`. Display each active campaign: state, archetype, pairs, rounds used/max, keepers found, best Sharpe, budget remaining. Include cold-start mode indicator. |
 | "Research {archetype}" | Create campaign immediately for the specified archetype (skip detection threshold). Aggregate all missed-opportunity cells for that archetype as targets. Run seed discovery. If seeds found, trigger autoresearch within budget. |
-| "Run research planner" | Execute the full weekly planning cycle now (same as the scheduled Monday task). |
+| "Run research planner" | Execute the full daily planning cycle now (same as the scheduled daily task). |
 | "Bootstrap nova" | Run Tier 1 nova scan on all untagged .py strategies. Classify by archetype. Store in `nova-scan.json`. Report coverage map: how many strategies matched each archetype. |
 | "Graduate {strategy} for {archetype}" | Manual graduation: verify walk-forward results, write header tags to strategy file, register in sdna registry, log to aphexDATA. |
 | "Approve extra round {campaign_id}" | Near-miss campaign gets +1 autoresearch round. Campaign moves from `near_miss` back to `researching`. Triggers next round immediately. |
@@ -755,7 +757,7 @@ PART 9: APHEXDATA EVENT CONVENTIONS
 | `research_near_miss` | analysis | campaign | Best keeper within 10% of threshold, awaiting user |
 | `research_stalled` | analysis | campaign | Budget exhausted, no keepers at all |
 | `research_abandoned` | execution | campaign | Campaign abandoned (manual or auto) |
-| `research_weekly_plan` | analysis | report | Weekly planning cycle summary |
+| `research_daily_plan` | analysis | report | Daily planning cycle summary |
 | `research_run_failed` | analysis | campaign | Individual autoresearch run failed |
 | `research_retried` | execution | campaign | Failed run auto-retried after swarm recovery |
 | `research_selftest_failed` | analysis | report | Swarm selftest failed before campaign submission |
