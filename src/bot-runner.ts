@@ -708,10 +708,33 @@ function recoverExistingBots(): void {
           const status: BotStatusFile = JSON.parse(
             fs.readFileSync(statusPath, 'utf-8'),
           );
+          // Query Docker for the actual host port (may differ from status
+          // file after a Docker Desktop restart).
+          let actualPort = status.api_port;
+          try {
+            const portOutput = execSync(
+              `docker port ${containerName} 8080`,
+              { encoding: 'utf-8', timeout: 5000 },
+            ).trim();
+            // Output like "8080/tcp -> 0.0.0.0:8085\n8080/tcp -> [::]:8085"
+            const match = portOutput.match(/:(\d+)/);
+            if (match) {
+              actualPort = parseInt(match[1], 10);
+              if (actualPort !== status.api_port) {
+                logger.info(
+                  { deploymentId, oldPort: status.api_port, newPort: actualPort },
+                  'Port changed after Docker restart — using actual port',
+                );
+              }
+            }
+          } catch {
+            // Fall back to status file port
+          }
+
           const bot: BotInstance = {
             deploymentId,
             containerName,
-            port: status.api_port,
+            port: actualPort,
             password: '', // Lost on restart — will need re-auth or status file enrichment
             strategy: status.strategy,
             pair: status.pair,
@@ -789,6 +812,30 @@ async function healthCheckBots(): Promise<void> {
           'Bot API ping failed',
         );
         continue;
+      }
+
+      // Container is alive and API responds — clear any stale error
+      if (bot.status === 'error') {
+        bot.status = 'running';
+        bot.error = undefined;
+        logger.info({ deploymentId }, 'Bot recovered from error state');
+      }
+
+      // Re-send start command if signals should be active but FreqTrade
+      // is in STOPPED state (happens after Docker Desktop restart).
+      if (bot.signalsActive && bot.password) {
+        try {
+          const stateRes = await ftApiCall(bot.port, 'GET', 'state', bot.password);
+          if (stateRes.status === 200) {
+            const state = JSON.parse(stateRes.body);
+            if (state.state === 'stopped') {
+              logger.info({ deploymentId }, 'Bot is stopped but signals_active=true — sending start');
+              await ftApiCall(bot.port, 'POST', 'start', bot.password);
+            }
+          }
+        } catch {
+          // Non-critical — will retry next health check
+        }
       }
 
       // Fetch profit data for status file
