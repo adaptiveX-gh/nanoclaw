@@ -341,8 +341,7 @@ function buildContainerArgs(
   // Long session-resume catch-ups (accumulated auto-mode ticks, research cycles)
   // can easily exceed 32K, causing "response exceeded 32000 output token maximum".
   // Allow overriding via host env so it can be tuned without a code change.
-  const maxOutputTokens =
-    process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS || '64000';
+  const maxOutputTokens = process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS || '64000';
   args.push('-e', `CLAUDE_CODE_MAX_OUTPUT_TOKENS=${maxOutputTokens}`);
 
   // Swarm: always use the container-side path (matches the bind mount).

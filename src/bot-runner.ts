@@ -308,8 +308,8 @@ function generateBotConfig(
       secret: '',
     },
     timeframe,
-    entry_pricing: { price_side: 'other' },
-    exit_pricing: { price_side: 'other' },
+    entry_pricing: { price_side: 'other', use_order_book: true, order_book_top: 1 },
+    exit_pricing: { price_side: 'other', use_order_book: true, order_book_top: 1 },
     pairlists: [{ method: 'StaticPairList' }],
     api_server: {
       enabled: true,
