@@ -87,6 +87,7 @@ export interface SchedulerDependencies {
     proc: ChildProcess,
     containerName: string,
     groupFolder: string,
+    isTask?: boolean,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
@@ -198,7 +199,7 @@ async function runTask(
         model: resolveModel(task.prompt),
       },
       (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder, true),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;

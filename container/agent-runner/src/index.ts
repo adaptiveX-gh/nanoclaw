@@ -659,6 +659,14 @@ async function main(): Promise<void> {
         messageCount = 0;
       }
 
+      // Scheduled tasks are one-shot: exit after the first query.
+      // This prevents task containers from competing with message containers
+      // for IPC input files when both run concurrently for the same group.
+      if (containerInput.isScheduledTask) {
+        log('Scheduled task complete, exiting (one-shot mode)');
+        break;
+      }
+
       // If _close was consumed during the query, exit immediately.
       // Don't emit a session-update marker (it would reset the host's
       // idle timer and cause a 30-min delay before the next _close).
