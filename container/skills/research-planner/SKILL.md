@@ -90,7 +90,32 @@ Procedure:
       - Micro_trend, tick → SCALPING
    c. Store classification in nova-scan.json
 4. For the target archetype: pick strategies with matching classification
-   AND MutationEligibility.eligible == true as seeds
+   AND that pass the Seed Quality Gate (below) as seeds
+```
+
+**Seed Quality Gate — apply to ALL seeds before submission (Tier 1, 2, or 3):**
+```
+A seed is only viable if ALL of the following hold:
+1. ARCHETYPE MATCH: The seed's core entry logic matches the target archetype.
+   A momentum-biased seed (MACD crossover, EMA trend) will produce 0 trades
+   when the market needs mean_reversion (RSI oversold, Bollinger bounce).
+   Check the actual indicator logic, not just the name.
+2. MUTATION SURFACE: The seed must have ≥2 eligible mutation families that
+   change trading behavior (adjust_params, swap_indicator, add_filter).
+   param_pin and risk_override alone are NOT sufficient — they cannot fix
+   a seed that produces zero trades.
+3. CONTINUOUS PARAMS: For sdna/derived seeds, entry/exit parameters must be
+   continuous floats (not categorical strings) for the mutation engine to
+   explore. Categorical params produce 0 variants.
+4. DATA CONFIRMED: OHLCV data must exist for ALL pairs the strategy needs,
+   including informative pairs from @informative decorators. Verify with
+   swarm_scan_strategy() before submitting.
+5. PRODUCES TRADES: If a quick triage backtest (single window) shows 0 trades,
+   the seed is non-viable. Do NOT submit a full autoresearch run — it will
+   waste budget on 0-trade mutations of a 0-trade seed.
+
+If no Tier 1/2 seeds pass this gate → skip directly to Tier 3 (sdna creation).
+Do not waste autoresearch budget on marginal seeds.
 ```
 
 **Parallelization:** For bulk scans (>5 strategies), use ClawTeam workers:
@@ -121,8 +146,10 @@ Procedure:
 
 ### Tier 3: ClawTeam Structural Creation (expensive, last resort)
 
-When no existing strategies match the target archetype, use ClawTeam to create
-one. Two modes, tried in order:
+When no existing strategies match the target archetype — **or when Tier 1/2
+seeds fail the Seed Quality Gate** (e.g., only param_pin mutations available,
+wrong archetype logic, categorical params) — use ClawTeam to create a
+purpose-built sdna seed. Two modes, tried in order:
 
 **Mode A: Fork from adjacent archetype (preferred)**
 
