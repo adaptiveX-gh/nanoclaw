@@ -466,12 +466,19 @@ For each completed autoresearch run:
      }
    )
 5. campaign.state = "graduated"
-6. Message user:
+6. **Auto-stage:** Immediately add the strategy to `roster.json` as STAGED
+   for the validated pair/timeframe. Do NOT wait for user to say "stage all".
+   This is safe because STAGED is dormant — no bot runs until auto-mode
+   promotes to shadow. Write the roster entry with:
+   - strategy_name, archetype, pair, timeframe
+   - graduation_date, wf_sharpe, preferred_regimes (from header tags)
+   - cell_status: "staged"
+7. Message user:
    "{strategy_name} graduated for {archetype}!
     WF Sharpe: {sharpe} | Degradation: {pct}% | Max DD: {dd}%
     Validated on: {pairs}
-    Auto-mode will discover and stage it on next scan."
-7. campaign.state = "staged" → "completed"
+    Auto-staged to roster. Auto-mode will shadow-deploy when regime aligns."
+8. campaign.state = "staged" → "completed"
 ```
 
 ### Step 4: Near-miss handling
