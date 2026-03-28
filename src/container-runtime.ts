@@ -107,7 +107,19 @@ export function cleanupOrphans(): void {
       `${CONTAINER_RUNTIME_BIN} ps --filter name=nanoclaw- --format '{{.Names}}'`,
       { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
     );
-    const orphans = output.trim().split('\n').filter(Boolean);
+    const allContainers = output.trim().split('\n').filter(Boolean);
+    const bots = allContainers.filter((name) =>
+      name.startsWith('nanoclaw-bot-'),
+    );
+    const orphans = allContainers.filter(
+      (name) => !name.startsWith('nanoclaw-bot-'),
+    );
+    if (bots.length > 0) {
+      logger.info(
+        { count: bots.length, names: bots },
+        'Preserved running bot containers',
+      );
+    }
     for (const name of orphans) {
       try {
         execSync(stopContainer(name), { stdio: 'pipe' });

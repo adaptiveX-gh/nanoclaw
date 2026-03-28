@@ -129,6 +129,34 @@ describe('cleanupOrphans', () => {
     );
   });
 
+  it('preserves bot containers and only stops agent orphans', () => {
+    mockExecSync.mockReturnValueOnce(
+      'nanoclaw-bot-wolfclaw-xrp-1h\nnanoclaw-group1-111\nnanoclaw-bot-aroon-eth-1h\n',
+    );
+    mockExecSync.mockReturnValue('');
+
+    cleanupOrphans();
+
+    // ps + 1 stop call (only the agent container)
+    expect(mockExecSync).toHaveBeenCalledTimes(2);
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      2,
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`,
+      { stdio: 'pipe' },
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        count: 2,
+        names: ['nanoclaw-bot-wolfclaw-xrp-1h', 'nanoclaw-bot-aroon-eth-1h'],
+      },
+      'Preserved running bot containers',
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      { count: 1, names: ['nanoclaw-group1-111'] },
+      'Stopped orphaned containers',
+    );
+  });
+
   it('continues stopping remaining containers when one stop fails', () => {
     mockExecSync.mockReturnValueOnce('nanoclaw-a-1\nnanoclaw-b-2\n');
     // First stop fails
