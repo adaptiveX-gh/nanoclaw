@@ -37,6 +37,93 @@ function readFile(filePath: string): string | null {
   }
 }
 
+/**
+ * Pre-flight validation of seed genome schemas before submission.
+ * Catches common agent mistakes that would otherwise only surface after
+ * the job is queued, spawned, and Pydantic rejects it (full round-trip delay).
+ */
+function validateSeedGenomes(seedGenomes: any[]): string[] {
+  const errors: string[] = [];
+  for (let i = 0; i < seedGenomes.length; i++) {
+    const sg = seedGenomes[i];
+    const g = sg?.genome;
+    if (!g) continue; // derived_subclass backend — no genome to validate
+
+    const pfx = `seed_genomes[${i}].genome`;
+
+    // identity.genome_id required
+    if (!g.identity?.genome_id) {
+      errors.push(`${pfx}.identity.genome_id: required (use a unique string or content hash)`);
+    }
+
+    // signal_stack conditions must use "column" and "value"
+    if (Array.isArray(g.signal_stack)) {
+      for (let s = 0; s < g.signal_stack.length; s++) {
+        const signal = g.signal_stack[s];
+        if (Array.isArray(signal.conditions)) {
+          for (let c = 0; c < signal.conditions.length; c++) {
+            const cond = signal.conditions[c];
+            if (cond.field !== undefined && cond.column === undefined) {
+              errors.push(`${pfx}.signal_stack[${s}].conditions[${c}]: use "column" not "field"`);
+            } else if (cond.column === undefined) {
+              errors.push(`${pfx}.signal_stack[${s}].conditions[${c}].column: required`);
+            }
+            if (cond.value_field !== undefined && cond.value === undefined) {
+              errors.push(`${pfx}.signal_stack[${s}].conditions[${c}]: use "value" not "value_field"`);
+            } else if (cond.value === undefined) {
+              errors.push(`${pfx}.signal_stack[${s}].conditions[${c}].value: required (number or column name string)`);
+            }
+          }
+        }
+      }
+    }
+
+    // filters[].condition (singular, not conditions)
+    if (Array.isArray(g.filters)) {
+      for (let f = 0; f < g.filters.length; f++) {
+        const filter = g.filters[f];
+        if (filter.conditions !== undefined && filter.condition === undefined) {
+          errors.push(`${pfx}.filters[${f}]: use "condition" (singular) not "conditions"`);
+        }
+        if (filter.condition) {
+          if (filter.condition.field !== undefined && filter.condition.column === undefined) {
+            errors.push(`${pfx}.filters[${f}].condition: use "column" not "field"`);
+          }
+          if (filter.condition.value === undefined) {
+            errors.push(`${pfx}.filters[${f}].condition.value: required`);
+          }
+        }
+      }
+    }
+
+    // risk_model.stoploss must be a negative number
+    if (g.risk_model?.stoploss !== undefined) {
+      if (typeof g.risk_model.stoploss === 'string') {
+        errors.push(`${pfx}.risk_model.stoploss: must be a negative float (e.g. -0.05), got string "${g.risk_model.stoploss}"`);
+      } else if (typeof g.risk_model.stoploss === 'number' && g.risk_model.stoploss > 0) {
+        errors.push(`${pfx}.risk_model.stoploss: must be negative (e.g. -0.05), got ${g.risk_model.stoploss}`);
+      }
+    }
+
+    // hyperoptable_parameters must have param_type, min_val, max_val, default, space
+    if (Array.isArray(g.hyperoptable_parameters)) {
+      for (let h = 0; h < g.hyperoptable_parameters.length; h++) {
+        const hp = g.hyperoptable_parameters[h];
+        if (!hp.param_type) {
+          errors.push(`${pfx}.hyperoptable_parameters[${h}].param_type: required ("int", "float", or "categorical")`);
+        }
+        if (hp.min_val === undefined && hp.param_type !== 'categorical') {
+          errors.push(`${pfx}.hyperoptable_parameters[${h}].min_val: required for ${hp.param_type || 'numeric'} params`);
+        }
+        if (hp.max_val === undefined && hp.param_type !== 'categorical') {
+          errors.push(`${pfx}.hyperoptable_parameters[${h}].max_val: required for ${hp.param_type || 'numeric'} params`);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
 const server = new McpServer({ name: 'swarm', version: '1.0.0' });
 
 // ─── Report Reading ──────────────────────────────────────────────────
@@ -492,6 +579,12 @@ server.tool(
         }
       }
 
+      // Deep schema validation — catch wrong field names before queuing
+      const schemaErrors = validateSeedGenomes(spec.seed_genomes);
+      if (schemaErrors.length > 0) {
+        return err(`Genome schema errors (fix before resubmitting):\n${schemaErrors.join('\n')}`);
+      }
+
       const runId = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       fs.mkdirSync(REQUEST_DIR, { recursive: true });
 
@@ -720,6 +813,12 @@ server.tool(
       }
       if (!spec.timerange) {
         return err('Invalid spec: missing timerange');
+      }
+
+      // Deep schema validation — catch wrong field names before execution
+      const schemaErrors = validateSeedGenomes(spec.seed_genomes);
+      if (schemaErrors.length > 0) {
+        return err(`Genome schema errors (fix before resubmitting):\n${schemaErrors.join('\n')}`);
       }
 
       const workers = Math.min(Math.max(args.workers || 4, 1), 8);
