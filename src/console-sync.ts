@@ -20,6 +20,8 @@ import { GROUPS_DIR } from './config.js';
 const SYNC_INTERVAL_MS = 60_000;
 const MAX_RETRIES = 3;
 const CURSOR_FILE = 'console-sync/cursor.json';
+const USAGE_FETCH_EVERY_N_CYCLES = 60; // ~hourly (60 × 60s)
+let syncCycleCount = 0;
 
 const CONSOLE_ENV_KEYS = [
   'CONSOLE_SUPABASE_URL',
@@ -240,6 +242,26 @@ async function fetchResearchData(config: SyncConfig): Promise<{
   }
 }
 
+async function fetchAnthropicUsage(config: SyncConfig): Promise<void> {
+  const url = `${config.supabaseUrl}/functions/v1/fetch-anthropic-usage`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${config.supabaseAnonKey}`,
+      'X-Sync-Key': config.syncKey,
+    },
+    body: JSON.stringify({ operator_id: config.operatorId }),
+  });
+  if (res.ok) {
+    const body = await res.json();
+    logger.info({ days: body.days?.length ?? 0 }, '[console-sync] Usage fetch complete');
+  } else {
+    logger.warn(`[console-sync] Usage fetch failed: ${res.status}`);
+  }
+}
+
 async function pushToConsole(
   config: SyncConfig,
   payload: any,
@@ -368,6 +390,14 @@ export async function runConsoleSync(
   } else {
     logger.warn(
       '[console-sync] Push failed after retries — will retry next cycle',
+    );
+  }
+
+  // Hourly: fetch Anthropic usage data into usage_daily
+  syncCycleCount++;
+  if (syncCycleCount % USAGE_FETCH_EVERY_N_CYCLES === 0) {
+    await fetchAnthropicUsage(config).catch((err) =>
+      logger.error({ err }, '[console-sync] Usage fetch error'),
     );
   }
 }
