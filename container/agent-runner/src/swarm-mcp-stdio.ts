@@ -1,12 +1,13 @@
 /**
  * Stdio MCP Server for NanoClaw FreqSwarm Integration
- * Provides 19 tools: 6 read-only for viewing strategy research reports,
+ * Provides 21 tools: 6 read-only for viewing strategy research reports,
  * 6 trigger tools for matrix sweeps, batch backtests, autoresearch batches, and job management,
  * 2 blocking execution tools (swarm_execute_sweep, swarm_execute_autoresearch),
  * 2 seed library tools for loading pre-built native sdna seed genomes,
  * 1 strategy library tool for listing available strategies,
  * 1 strategy scanner tool for determining mutation eligibility of non-sdna strategies,
- * 1 history tool for querying past autoresearch mutations on a strategy.
+ * 1 history tool for querying past autoresearch mutations on a strategy,
+ * 2 graduation tools for applying per-archetype gates and staging keepers to roster.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -1121,6 +1122,392 @@ server.tool(
       });
     } catch (e) {
       return err(`Failed to read autoresearch history: ${(e as Error).message}`);
+    }
+  },
+);
+
+// ─── Graduation Gate Enforcement ────────────────────────────────────
+
+/** Parse graduation_gates for a given archetype from archetypes.yaml (no js-yaml dependency). */
+function parseGraduationGates(
+  yamlContent: string,
+  archetype: string,
+): { min_trades_per_window: number; min_wf_sharpe: number; max_wf_degradation_pct: number; max_drawdown_pct: number } | null {
+  // Find the archetype section: "  ARCHETYPE_NAME:"
+  const sectionRegex = new RegExp(`^  ${archetype}:`, 'm');
+  const sectionMatch = sectionRegex.exec(yamlContent);
+  if (!sectionMatch) return null;
+
+  // Find graduation_gates: within this section (before next archetype or end)
+  const afterSection = yamlContent.slice(sectionMatch.index);
+  const gatesMatch = afterSection.match(/graduation_gates:\s*\n((?:\s+\w+:.*\n?)+)/);
+  if (!gatesMatch) return null;
+
+  const gatesBlock = gatesMatch[1];
+  const extract = (key: string): number => {
+    const m = gatesBlock.match(new RegExp(`${key}:\\s*([\\d.]+)`));
+    return m ? parseFloat(m[1]) : NaN;
+  };
+
+  const gates = {
+    min_trades_per_window: extract('min_trades_per_window'),
+    min_wf_sharpe: extract('min_wf_sharpe'),
+    max_wf_degradation_pct: extract('max_wf_degradation_pct'),
+    max_drawdown_pct: extract('max_drawdown_pct'),
+  };
+
+  if (Object.values(gates).some(v => isNaN(v))) return null;
+  return gates;
+}
+
+type WfPattern = 'CONSISTENT' | 'DEGRADING' | 'ALTERNATING' | 'SINGLE_SPIKE';
+
+/** Classify walk-forward pattern from per-window Sharpe values. */
+function classifyWfPattern(sharpes: number[]): WfPattern {
+  if (sharpes.length < 2) return 'CONSISTENT';
+
+  const mean = sharpes.reduce((a, b) => a + b, 0) / sharpes.length;
+  const positiveCount = sharpes.filter(s => s > 0).length;
+  const positiveRatio = positiveCount / sharpes.length;
+  const maxSharpe = Math.max(...sharpes);
+
+  // SINGLE_SPIKE: one window > 1.0, mean of others < 0.1
+  if (maxSharpe > 1.0) {
+    const others = sharpes.filter(s => s !== maxSharpe);
+    const othersMean = others.length > 0 ? others.reduce((a, b) => a + b, 0) / others.length : 0;
+    if (othersMean < 0.1) return 'SINGLE_SPIKE';
+  }
+
+  // DEGRADING: first half significantly better than second half
+  const half = Math.floor(sharpes.length / 2);
+  const firstHalf = sharpes.slice(0, half);
+  const secondHalf = sharpes.slice(half);
+  const firstMean = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+  const secondMean = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+  if (firstMean > 0 && firstMean > 2 * secondMean) return 'DEGRADING';
+
+  // CONSISTENT: >=75% windows positive, no single window dominates (max < 2× mean)
+  if (positiveRatio >= 0.75 && (mean <= 0 || maxSharpe < 2 * mean)) return 'CONSISTENT';
+
+  return 'ALTERNATING';
+}
+
+const ARCHETYPES_PATHS = [
+  '/home/node/.claude/skills/archetype-taxonomy/archetypes.yaml',
+  '/workspace/skills/archetype-taxonomy/archetypes.yaml',
+];
+
+server.tool(
+  'swarm_check_graduation_gates',
+  'Apply per-archetype graduation gates from archetypes.yaml to keepers from a completed autoresearch run. Calculates WF degradation, classifies walk-forward patterns (CONSISTENT/DEGRADING/ALTERNATING/SINGLE_SPIKE), and checks all 4 gates (Sharpe, degradation, trades/window, max drawdown). Returns structured verdicts: passed/failed/near_miss for each keeper. Use after swarm_job_results shows keepers.',
+  {
+    run_id: z.string().describe('Run ID of a completed autoresearch job'),
+    archetype: z.string().describe('Archetype name from archetypes.yaml (e.g. "MEAN_REVERSION", "TREND_MOMENTUM")'),
+  },
+  async (args) => {
+    try {
+      // 1. Load graduation gates from archetypes.yaml
+      let yamlContent: string | null = null;
+      for (const p of ARCHETYPES_PATHS) {
+        yamlContent = readFile(p);
+        if (yamlContent) break;
+      }
+      if (!yamlContent) {
+        return err(`archetypes.yaml not found at any known path: ${ARCHETYPES_PATHS.join(', ')}. Ensure archetype-taxonomy skill is installed.`);
+      }
+
+      const gates = parseGraduationGates(yamlContent, args.archetype);
+      if (!gates) {
+        return err(`Archetype "${args.archetype}" not found in archetypes.yaml or graduation_gates malformed. Valid archetypes: TREND_MOMENTUM, MEAN_REVERSION, BREAKOUT, RANGE_BOUND, SCALPING, CARRY_FUNDING, VOLATILITY_HARVEST.`);
+      }
+
+      // 2. Read job results (same pattern as swarm_job_results)
+      const statusPath = path.join(REQUEST_DIR, `${args.run_id}.status.json`);
+      if (!fs.existsSync(statusPath)) {
+        return err(`Run not found: ${args.run_id}. Use swarm_trigger_autoresearch to submit a run first.`);
+      }
+      const status = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+      if (status.status !== 'completed') {
+        return err(`Run ${args.run_id} is not completed (status: ${status.status}). Wait for completion.`);
+      }
+      if (!status.report_dir) {
+        return err(`Run ${args.run_id} completed but has no report_dir. Check exit code: ${status.exit_code}`);
+      }
+      const resultsPath = path.join(status.report_dir, 'latest', 'results.json');
+      const resultsContent = readFile(resultsPath);
+      if (!resultsContent) {
+        return err(`Results file not found at ${resultsPath}. The job may have failed to write output.`);
+      }
+      const results = JSON.parse(resultsContent);
+      const keepers: Array<Record<string, unknown>> = results.keepers || [];
+
+      if (keepers.length === 0) {
+        log(`Graduation gates: ${args.run_id} — no keepers to evaluate`);
+        return ok({
+          archetype: args.archetype,
+          gates_used: gates,
+          keepers: [],
+          summary: { total: 0, passed: 0, failed: 0, near_miss: 0 },
+          message: 'No keepers found in autoresearch results. All variants were rejected by FreqSwarm.',
+        });
+      }
+
+      // 3. Evaluate each keeper against graduation gates
+      const NEAR_MISS_TOLERANCE = 0.10; // 10% tolerance for near-miss
+      const evaluated = keepers.map((keeper: Record<string, unknown>) => {
+        const perWindow = (keeper.per_window_results || []) as Array<Record<string, unknown>>;
+        const meanSharpe = (keeper.mean_sharpe as number) || 0;
+        const variantName = (keeper.variant_name as string) || 'unknown';
+        const pair = (keeper.pair as string) || 'unknown';
+        const timeframe = (keeper.timeframe as string) || 'unknown';
+
+        // Extract per-window Sharpe values
+        const windowSharpes = perWindow.map((w) => {
+          const metrics = (w.metrics || {}) as Record<string, unknown>;
+          return (metrics.sharpe as number) ?? (metrics.Sharpe as number) ?? 0;
+        });
+
+        // Extract per-window trade counts and drawdowns
+        const windowTrades = perWindow.map((w) => {
+          const metrics = (w.metrics || {}) as Record<string, unknown>;
+          return (metrics.trades as number) ?? (metrics.trade_count as number) ?? 0;
+        });
+        const windowDrawdowns = perWindow.map((w) => {
+          const metrics = (w.metrics || {}) as Record<string, unknown>;
+          const dd = (metrics.max_drawdown_pct as number) ?? (metrics.max_drawdown as number) ?? 0;
+          // Normalize: drawdown should be positive for comparison (e.g. 15 means 15%)
+          return Math.abs(dd) > 1 ? Math.abs(dd) : Math.abs(dd) * 100;
+        });
+
+        // Calculate degradation
+        const half = Math.floor(windowSharpes.length / 2);
+        const firstHalf = windowSharpes.slice(0, Math.max(half, 1));
+        const secondHalf = windowSharpes.slice(Math.max(half, 1));
+        const firstMean = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+        const secondMean = secondHalf.length > 0 ? secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length : 0;
+        const degradationPct = firstMean > 0 ? (1 - secondMean / firstMean) * 100 : 100;
+
+        // Min trades across windows (gate requires ALL windows to meet minimum)
+        const minTrades = windowTrades.length > 0 ? Math.min(...windowTrades) : 0;
+
+        // Worst drawdown across windows
+        const worstDrawdownPct = windowDrawdowns.length > 0 ? Math.max(...windowDrawdowns) : 0;
+
+        // Classify WF pattern
+        const wfPattern = classifyWfPattern(windowSharpes);
+
+        // Check 4 gates
+        const gateDetails = {
+          sharpe: meanSharpe >= gates.min_wf_sharpe,
+          degradation: degradationPct <= gates.max_wf_degradation_pct,
+          trades: minTrades >= gates.min_trades_per_window,
+          drawdown: worstDrawdownPct <= gates.max_drawdown_pct,
+        };
+
+        const allPassed = Object.values(gateDetails).every(Boolean);
+
+        // Near-miss: check if ALL failed gates are within 10% tolerance
+        let isNearMiss = false;
+        if (!allPassed) {
+          const failures: boolean[] = [];
+          if (!gateDetails.sharpe) {
+            failures.push(meanSharpe >= gates.min_wf_sharpe * (1 - NEAR_MISS_TOLERANCE));
+          }
+          if (!gateDetails.degradation) {
+            failures.push(degradationPct <= gates.max_wf_degradation_pct * (1 + NEAR_MISS_TOLERANCE));
+          }
+          if (!gateDetails.trades) {
+            failures.push(minTrades >= gates.min_trades_per_window * (1 - NEAR_MISS_TOLERANCE));
+          }
+          if (!gateDetails.drawdown) {
+            failures.push(worstDrawdownPct <= gates.max_drawdown_pct * (1 + NEAR_MISS_TOLERANCE));
+          }
+          isNearMiss = failures.length > 0 && failures.every(Boolean);
+        }
+
+        const verdict = allPassed ? 'passed' : isNearMiss ? 'near_miss' : 'failed';
+
+        return {
+          variant_name: variantName,
+          pair,
+          timeframe,
+          mean_sharpe: Math.round(meanSharpe * 1000) / 1000,
+          degradation_pct: Math.round(degradationPct * 10) / 10,
+          min_trades: minTrades,
+          worst_drawdown_pct: Math.round(worstDrawdownPct * 10) / 10,
+          wf_pattern: wfPattern,
+          verdict,
+          gate_details: gateDetails,
+          per_window_sharpes: windowSharpes.map(s => Math.round(s * 1000) / 1000),
+        };
+      });
+
+      const summary = {
+        total: evaluated.length,
+        passed: evaluated.filter(e => e.verdict === 'passed').length,
+        failed: evaluated.filter(e => e.verdict === 'failed').length,
+        near_miss: evaluated.filter(e => e.verdict === 'near_miss').length,
+      };
+
+      log(`Graduation gates: ${args.run_id} (${args.archetype}) — ${summary.passed} passed, ${summary.near_miss} near-miss, ${summary.failed} failed out of ${summary.total} keepers`);
+
+      return ok({
+        archetype: args.archetype,
+        gates_used: gates,
+        keepers: evaluated,
+        summary,
+        message: summary.passed > 0
+          ? `${summary.passed} keeper(s) passed graduation gates for ${args.archetype}! Ready to graduate.`
+          : summary.near_miss > 0
+            ? `No keepers passed, but ${summary.near_miss} are within 10% of threshold. Consider an extra research round.`
+            : `All ${summary.total} keepers failed graduation gates for ${args.archetype}.`,
+      });
+    } catch (e) {
+      return err(`Failed to check graduation gates: ${(e as Error).message}`);
+    }
+  },
+);
+
+server.tool(
+  'swarm_graduate_keeper',
+  'Graduate a keeper strategy that passed graduation gates. Writes archetype header tags to the strategy .py file and adds/updates the entry in roster.json for auto-mode discovery. Call AFTER swarm_check_graduation_gates confirms a keeper passed. The agent should also call aphexdata_record_event with verb_id="research_graduated" separately.',
+  {
+    strategy_path: z.string().describe('Absolute path to the strategy .py file inside the container (e.g. /workspace/group/user_data/strategies/MyStrategy.py)'),
+    archetype: z.string().describe('Archetype name (e.g. "MEAN_REVERSION")'),
+    pair: z.string().describe('Validated pair (e.g. "ETH/USDT:USDT")'),
+    timeframe: z.string().describe('Validated timeframe (e.g. "1h")'),
+    wf_sharpe: z.number().describe('Walk-forward Sharpe ratio (mean across windows)'),
+    wf_degradation_pct: z.number().describe('Walk-forward degradation percentage'),
+    roster_path: z.string().optional().describe('Path to roster.json (default: /workspace/group/roster.json)'),
+  },
+  async (args) => {
+    try {
+      const rosterPath = args.roster_path || '/workspace/group/roster.json';
+      const strategyName = path.basename(args.strategy_path, '.py');
+      const today = new Date().toISOString().split('T')[0];
+
+      // 1. Prepend header tags to strategy file
+      if (!fs.existsSync(args.strategy_path)) {
+        return err(`Strategy file not found: ${args.strategy_path}`);
+      }
+      const existingContent = fs.readFileSync(args.strategy_path, 'utf-8');
+
+      // Remove any existing graduation headers (re-graduation scenario)
+      const cleanedContent = existingContent.replace(
+        /^# (ARCHETYPE|GRADUATED|WALK_FORWARD_DEGRADATION|VALIDATED_PAIRS):.*\n/gm,
+        '',
+      );
+
+      const headerTags = [
+        `# ARCHETYPE: ${args.archetype}`,
+        `# GRADUATED: ${today}`,
+        `# WALK_FORWARD_DEGRADATION: ${Math.round(args.wf_degradation_pct)}%`,
+        `# VALIDATED_PAIRS: ${args.pair}`,
+      ].join('\n');
+
+      fs.writeFileSync(args.strategy_path, headerTags + '\n' + cleanedContent.replace(/^\n+/, ''));
+
+      // 2. Update roster.json
+      interface RosterCell {
+        pair: string;
+        timeframe: string;
+        status: string;
+        last_activated: string | null;
+        last_deactivated: string | null;
+        activation_count: number;
+      }
+      interface RosterEntry {
+        strategy_name: string;
+        strategy_path: string;
+        archetype: string;
+        validated_pairs: string[];
+        timeframe: string;
+        wf_degradation_pct: number;
+        wf_sharpe: number;
+        graduated_at: string;
+        cells: RosterCell[];
+      }
+      interface Roster {
+        version: number;
+        roster: RosterEntry[];
+        last_updated: string;
+      }
+
+      let roster: Roster;
+      if (fs.existsSync(rosterPath)) {
+        roster = JSON.parse(fs.readFileSync(rosterPath, 'utf-8'));
+      } else {
+        roster = { version: 1, roster: [], last_updated: today };
+      }
+
+      // Find existing entry for this strategy or create new one
+      let entry = roster.roster.find(r => r.strategy_name === strategyName);
+      if (entry) {
+        // Merge: add pair if not already validated, add cell
+        if (!entry.validated_pairs.includes(args.pair)) {
+          entry.validated_pairs.push(args.pair);
+        }
+        // Update graduation metrics to latest
+        entry.wf_sharpe = args.wf_sharpe;
+        entry.wf_degradation_pct = args.wf_degradation_pct;
+        entry.graduated_at = today;
+        // Add cell if not already present for this pair+timeframe
+        const cellExists = entry.cells.some(
+          c => c.pair === args.pair && c.timeframe === args.timeframe,
+        );
+        if (!cellExists) {
+          entry.cells.push({
+            pair: args.pair,
+            timeframe: args.timeframe,
+            status: 'staged',
+            last_activated: null,
+            last_deactivated: null,
+            activation_count: 0,
+          });
+        }
+      } else {
+        entry = {
+          strategy_name: strategyName,
+          strategy_path: args.strategy_path,
+          archetype: args.archetype,
+          validated_pairs: [args.pair],
+          timeframe: args.timeframe,
+          wf_degradation_pct: args.wf_degradation_pct,
+          wf_sharpe: args.wf_sharpe,
+          graduated_at: today,
+          cells: [
+            {
+              pair: args.pair,
+              timeframe: args.timeframe,
+              status: 'staged',
+              last_activated: null,
+              last_deactivated: null,
+              activation_count: 0,
+            },
+          ],
+        };
+        roster.roster.push(entry);
+      }
+
+      roster.last_updated = new Date().toISOString();
+      fs.writeFileSync(rosterPath, JSON.stringify(roster, null, 2) + '\n');
+
+      log(`Graduated: ${strategyName} (${args.archetype}) for ${args.pair}/${args.timeframe} — Sharpe ${args.wf_sharpe}, degradation ${args.wf_degradation_pct}%`);
+
+      return ok({
+        graduated: true,
+        strategy_name: strategyName,
+        archetype: args.archetype,
+        pair: args.pair,
+        timeframe: args.timeframe,
+        header_tags_written: true,
+        roster_updated: true,
+        roster_path: rosterPath,
+        roster_entry: entry,
+        message: `${strategyName} graduated for ${args.archetype}! WF Sharpe: ${args.wf_sharpe} | Degradation: ${Math.round(args.wf_degradation_pct)}% | Staged to roster for auto-mode discovery.`,
+      });
+    } catch (e) {
+      return err(`Failed to graduate keeper: ${(e as Error).message}`);
     }
   },
 );

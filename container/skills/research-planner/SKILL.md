@@ -29,7 +29,7 @@ PART 1: DEPENDENCIES
 | Skill | What it provides |
 |-------|-----------------|
 | auto-mode | `missed-opportunities.json`, `missed_opportunity_daily_summary` events, roster |
-| freqswarm | `swarm_scan_strategy`, `swarm_trigger_autoresearch`, `swarm_poll_run`, `swarm_job_results`, `swarm_autoresearch_history`, `swarm_list_seeds`, `swarm_load_seed` |
+| freqswarm | `swarm_scan_strategy`, `swarm_trigger_autoresearch`, `swarm_poll_run`, `swarm_job_results`, `swarm_check_graduation_gates`, `swarm_graduate_keeper`, `swarm_autoresearch_history`, `swarm_list_seeds`, `swarm_load_seed` |
 | clawteam | `team_spawn_worker`, `team_wait_all` for Tier 3 structural creation |
 | archetype-taxonomy | `archetypes.yaml` — 7 archetypes, strategy_tags, risk_profiles |
 | aphexdna | `sdna_registry_search`, `sdna_fork`, `sdna_compile`, `sdna_attest`, `sdna_registry_add` |
@@ -41,20 +41,26 @@ PART 2: PIPELINE STAGES
 ═══════════════════════════════════════════════════════════════════════
 
 ```
-DETECTED → PLANNED → SEEDED → RESEARCHING ──→ GRADUATED → STAGED → COMPLETED
-                                    │    ↘              │
-                                    │   NEAR_MISS       │
-                                    │   (user decides)  │
-                                    └─ budget exhausted → ABANDONED
-                        no seeds → DEFERRED            auto-mode takes over
+DETECTED → PLANNED → SEEDED → TRIAGED ──→ RESEARCHING ──→ GRADUATED → STAGED → COMPLETED
+                                  │    ↘                        │
+                                  │   HYPEROPT → RESEARCHING    │
+                                  │        ↓                    │
+                                  │   (re-triage result)   NEAR_MISS
+                                  │                        (user decides)
+                                  └─ VALIDATE_ONLY ──────→ GRADUATED
+                                  └─ SKIP ──────────────→ ABANDONED
+                                budget exhausted → ABANDONED
+                      no seeds → DEFERRED            auto-mode takes over
 ```
 
 | Stage | Entry | Action | Exit |
 |-------|-------|--------|------|
 | `detected` | Auto-mode logs `missed_opportunity` | Aggregate: frequency × avg_composite | Threshold met (freq ≥ 3 in 7d OR avg_composite ≥ 4.0) |
 | `planned` | Threshold met, campaign created | Assign archetype, targets, budget, fitness criteria from archetypes.yaml | Seeds identified (≥1 seed) |
-| `seeded` | ≥1 seed strategy found | Prepare AutoresearchSpec with seeds, pairs, timeframes | Autoresearch triggered |
-| `researching` | `swarm_trigger_autoresearch` submitted | Poll with `swarm_poll_run`, check for keepers | Keeper found OR budget exhausted |
+| `seeded` | ≥1 seed strategy found | Run pre-gate triage on each seed | Triage complete, mode selected |
+| `triaged` | Pre-gate WF complete | Classify WF pattern + select research mode via decision tree | Mode selected → next state |
+| `hyperopt` | Mode=HYPEROPT selected | Run `freqtrade_run_hyperopt`, re-triage best result | Passes gates → graduated; fails → researching (param_pin) |
+| `researching` | Mode=PARAM_PIN or STRUCTURAL selected, or HYPEROPT escalated | Poll with `swarm_poll_run`, check for keepers | Keeper found OR budget exhausted |
 | `near_miss` | Budget exhausted but best keeper within 10% of graduation threshold | Message user with metrics + options | User approves → `researching` (+1 round); declines → `abandoned` |
 | `graduated` | Keeper passes walk-forward gate | Write header tags, register in sdna, log to aphexDATA | Strategy file tagged |
 | `staged` | Header tags written | Auto-mode discovers on next scan | Campaign → `completed` |
@@ -94,6 +100,113 @@ Procedure:
       derived_subclass seeds, without it 0 variants are generated).
 4. For the target archetype: pick strategies with matching classification
    AND that pass the Seed Quality Gate (below) as seeds
+```
+
+**Pre-Gate Triage — test before mutating:**
+
+Before running full autoresearch on a seed, test it AS-IS through the full
+walk-forward validation. A strategy that already works doesn't need mutation —
+it needs validation. This saves autoresearch budget and catches strategies
+that are already viable at their default parameters.
+
+```
+Pre-Gate Triage procedure (run BEFORE Seed Quality Gate):
+1. For each candidate seed matched to the target archetype:
+   a. Run a full N-window walk-forward backtest on the target pair(s)
+      using the strategy's default parameters (no mutations).
+      Use: swarm_trigger_autoresearch with mutations_per_genome=0
+      OR run individual backtests per window via freqtrade_backtest.
+   b. Collect per-window Sharpe, trade count, max drawdown.
+   c. Check against archetype graduation_gates from archetypes.yaml:
+      - Trades per window >= graduation_gates.min_trades_per_window
+      - Mean WF Sharpe >= graduation_gates.min_wf_sharpe
+      - Max drawdown < graduation_gates.max_drawdown_pct
+      - WF degradation < graduation_gates.max_wf_degradation_pct
+   d. Classify walk-forward pattern (see Part 5, Step 1c).
+   e. If the strategy passes ALL graduation criteria at default params:
+      → GRADUATE IMMEDIATELY. Skip autoresearch entirely.
+        Write header tags, register, stage — same as Step 3 in Part 5.
+        Log: aphexdata_record_event(verb_id="research_graduated",
+          result_data={..., graduation_path: "pre_gate_triage"})
+   f. If the strategy produces trades but doesn't pass graduation:
+      → Proceed to Seed Quality Gate. It's a valid seed for mutation.
+   g. If the strategy produces 0 trades on the target pair:
+      → Reject as seed. Do NOT submit to autoresearch.
+
+Key insight: A strategy with zero hyperopt params but Sharpe 0.7 is more
+valuable than one with 10 params and Sharpe 0.1. Test the signal first,
+then optimize parameters only if the base signal has potential.
+```
+
+**Research Mode Selection — choose the right tool for the diagnosis:**
+
+After pre-gate triage completes, you have per-window Sharpe values, trade counts,
+and WF pattern classification for each seed. Use this decision tree to select the
+cheapest effective research mode. The principle: start cheap, escalate only when
+the cheaper tool fails.
+
+```
+RESEARCH MODE DECISION TREE
+════════════════════════════
+
+Triage Sharpe >= graduation_gates.min_wf_sharpe?
+├─ YES + CONSISTENT pattern → VALIDATE_ONLY
+│   (Graduate immediately — no mutation needed)
+├─ YES + DEGRADING pattern → HYPEROPT
+│   (Good signal exists but overfits — reoptimize params)
+├─ YES + ALTERNATING pattern → PARAM_PIN
+│   (Regime-dependent — try param variations)
+├─ YES + SINGLE_SPIKE → PARAM_PIN
+│   (Lucky streak? Mutation tests if edge is real)
+│
+├─ NO (Sharpe 0.1 to threshold) + >=min_trades → HYPEROPT
+│   (Some signal — let hyperopt find better params)
+├─ NO (Sharpe 0.1 to threshold) + <min_trades → STRUCTURAL
+│   (Signal too weak for param tuning — needs code changes)
+├─ NO (Sharpe < 0.1) + any pattern → SKIP
+│   (No detectable edge — don't waste budget)
+└─ 0 trades → SKIP (pair/timeframe mismatch)
+
+Threshold = archetype.graduation_gates.min_wf_sharpe
+```
+
+Research modes and their costs:
+
+| Mode | Cost | Duration | What it does |
+|------|------|----------|-------------|
+| VALIDATE_ONLY | 0 budget | ~30s | Already passes — graduate directly |
+| HYPEROPT | 1 autoresearch slot | ~15 min | `freqtrade_run_hyperopt` on full timerange, then re-triage best result |
+| PARAM_PIN | 1 autoresearch slot | ~20 min | Standard autoresearch mutation batch (current behavior) |
+| STRUCTURAL | 1 clawteam slot | ~45 min | ClawTeam creates entry/exit variants |
+| HYBRID | 1 each | ~35 min | Hyperopt first, then param_pin on best result |
+| SKIP | 0 | 0 | Reject seed, try next |
+
+Mode selection updates campaign state:
+```
+VALIDATE_ONLY → state: "graduated" (skip researching entirely)
+HYPEROPT → state: "hyperopt"
+PARAM_PIN → state: "researching" (current flow, unchanged)
+STRUCTURAL → state: "researching" (via clawteam)
+HYBRID → state: "hyperopt" (then auto-transitions to "researching")
+SKIP → remove from seed list; if no seeds remain → state: "abandoned"
+
+Log mode selection:
+  aphexdata_record_event(verb_id="research_mode_selected", result_data={
+    campaign_id, seed_name, triage_sharpe, wf_pattern, selected_mode,
+    decision_reason: "sharpe_above_threshold+consistent_pattern"
+  })
+```
+
+Escalation ladder — each step only triggers if the previous one didn't solve the problem:
+```
+Triage (30s, free) → VALIDATE_ONLY if passes
+                   → HYPEROPT (15min, 1 slot) if signal exists
+                     → Graduate if hyperopt passes
+                     → PARAM_PIN (20min, 1 slot) if improved but not passing
+                       → Graduate if keeper found
+                       → STRUCTURAL (45min, 1 clawteam slot) if no keepers
+                         → Graduate if ClawTeam variant passes
+                         → ABANDONED if all fail
 ```
 
 **Seed Quality Gate — apply to ALL seeds before submission (Tier 1, 2, or 3):**
@@ -526,40 +639,93 @@ For each campaign in "researching" state with ALL run_ids in "failed" status:
        recovery (attempt {retry_count}/3). New run: {run_id}"
 ```
 
-### Step 2: Check for keepers
+### Step 1c: Walk-forward interpretation
+
+Before applying graduation gates, classify the walk-forward pattern. Raw
+numbers without context lead to bad decisions — a strategy with mean Sharpe
+0.5 that degrades across windows is worse than one with mean 0.4 that stays
+consistent.
+
+```
+For each completed variant with per-window Sharpe values [W0, W1, W2, W3]:
+
+1. Classify the WF pattern:
+   - CONSISTENT: ≥75% of windows have positive Sharpe, no single window
+     dominates (max window Sharpe < 2× mean). Best pattern — indicates
+     robust edge across market conditions.
+   - DEGRADING: First half windows significantly better than second half
+     (mean(W0,W1) > 2× mean(W2,W3)). Warns of overfitting to earlier
+     data or regime shift. Penalize: effective Sharpe = mean × 0.8.
+   - ALTERNATING: Positive in some regime types, negative in others.
+     Analyze regime alignment:
+     * Trending windows (W0: Jan-Apr, W2: Aug-Dec typically trending)
+     * Choppy windows (W1: Apr-Aug, W3: Dec-Mar typically ranging)
+     * TREND_MOMENTUM should be positive in trending windows
+     * MEAN_REVERSION should be positive in choppy windows
+     If regime alignment matches archetype → acceptable (the strategy
+     works when its regime is active). If misaligned → reject.
+   - SINGLE_SPIKE: One window has Sharpe > 1.0 while others are near
+     zero or negative. Likely a lucky streak, not a real edge.
+     Reject unless the spike window has ≥20 trades.
+
+2. Check for regime alignment (archetype-specific):
+   For MEAN_REVERSION: positive Sharpe in choppy windows (W1/W3) is
+     MORE important than overall mean. A strategy that's +0.6 in choppy
+     and -0.2 in trending is better than one that's +0.3 everywhere
+     (the former has a real MR edge, the latter might be noise).
+   For TREND_MOMENTUM: positive Sharpe in trending windows (W0/W2) is
+     the key signal. Negative in choppy windows is expected and acceptable.
+
+3. Flag anomalies:
+   - 0 trades in any window → data gap or pair mismatch, investigate
+   - Single-digit trades in a window → low-sample, discount that window
+   - Max drawdown > 2× archetype limit in any window → reject even if
+     mean looks good (tail risk)
+```
+
+### Step 2: Check for keepers (automated via MCP tools)
+
+Use `swarm_check_graduation_gates` to apply per-archetype gates automatically.
+This tool reads archetypes.yaml, calculates WF degradation, classifies
+walk-forward patterns, and returns structured pass/fail/near_miss verdicts.
 
 ```
 For each completed autoresearch run:
-  keepers = full_results.keepers (where is_keeper == true)
+  result = swarm_check_graduation_gates(run_id=run_id, archetype=campaign.archetype)
 
-  For each keeper, check graduation criteria against the archetype's
-  graduation_gates from archetypes.yaml (config.json overrides still apply):
-    - WF Sharpe >= archetype.graduation_gates.min_wf_sharpe
-    - WF degradation < archetype.graduation_gates.max_wf_degradation_pct
-    - Trades per window >= archetype.graduation_gates.min_trades_per_window
-    - Max drawdown < archetype.graduation_gates.max_drawdown_pct
-
-  Graduation gates are defined per-archetype in archetypes.yaml. Low-frequency
-  archetypes (CARRY_FUNDING, MEAN_REVERSION) have lower trade count requirements.
-  High-frequency archetypes (SCALPING) have higher requirements but lower Sharpe
-  thresholds.
-
-  If keeper passes ALL criteria → run graduation (Step 3)
-  If no keeper passes but best keeper within 10% of threshold → near_miss (Step 4)
-
-  Track: campaign.research.best_sharpe = max(keepers.mean_sharpe)
+  Track: campaign.research.best_sharpe = max keeper mean_sharpe from result
   Log: aphexdata_record_event(verb_id="research_keeper_found", ...) for each keeper
+
+  If result.summary.passed > 0 → pick best passed keeper, run graduation (Step 3)
+  If result.summary.near_miss > 0 and no passed → near_miss (Step 4)
+  If all failed → budget check (retry or abandon)
 ```
 
-### Step 3: Graduate keeper
+The tool checks all 4 graduation gates per archetype from archetypes.yaml:
+- WF Sharpe >= archetype.graduation_gates.min_wf_sharpe
+- WF degradation < archetype.graduation_gates.max_wf_degradation_pct
+- Trades per window >= archetype.graduation_gates.min_trades_per_window
+- Max drawdown < archetype.graduation_gates.max_drawdown_pct
+
+### Step 3: Graduate keeper (automated via MCP tool)
+
+Use `swarm_graduate_keeper` to atomically write header tags and stage to roster.
+This tool prepends header tags to the strategy .py file and adds/updates the
+entry in roster.json with cell_status="staged" for auto-mode discovery.
 
 ```
-1. Get strategy file path from autoresearch results
-2. Write header tags to first lines of .py file:
-   # ARCHETYPE: {archetype}
-   # GRADUATED: {YYYY-MM-DD}
-   # WALK_FORWARD_DEGRADATION: {pct}%
-   # VALIDATED_PAIRS: {pair1}, {pair2}
+1. Pick the best passing keeper (highest mean_sharpe) from Step 2 results
+2. swarm_graduate_keeper(
+     strategy_path="/workspace/group/user_data/strategies/{strategy_name}.py",
+     archetype=campaign.archetype,
+     pair=keeper.pair,
+     timeframe=keeper.timeframe,
+     wf_sharpe=keeper.mean_sharpe,
+     wf_degradation_pct=keeper.degradation_pct
+   )
+   This atomically:
+   - Writes header tags: # ARCHETYPE, # GRADUATED, # WALK_FORWARD_DEGRADATION, # VALIDATED_PAIRS
+   - Creates/updates roster.json with cell_status="staged"
 3. If sdna genome: sdna_attest(genome_id) + sdna_registry_add(genome_id)
 4. aphexdata_record_event(
      verb_id="research_graduated",
@@ -571,20 +737,8 @@ For each completed autoresearch run:
        campaign_id, seed_source, rounds_used
      }
    )
-5. campaign.state = "graduated"
-6. **Auto-stage:** Immediately add the strategy to `roster.json` as STAGED
-   for the validated pair/timeframe. Do NOT wait for user to say "stage all".
-   This is safe because STAGED is dormant — no bot runs until auto-mode
-   promotes to shadow. Write the roster entry with:
-   - strategy_name, archetype, pair, timeframe
-   - graduation_date, wf_sharpe, preferred_regimes (from header tags)
-   - cell_status: "staged"
-7. Message user:
-   "{strategy_name} graduated for {archetype}!
-    WF Sharpe: {sharpe} | Degradation: {pct}% | Max DD: {dd}%
-    Validated on: {pairs}
-    Auto-staged to roster. Auto-mode will shadow-deploy when regime aligns."
-8. campaign.state = "staged" → "completed"
+5. campaign.state = "graduated" → "staged" → "completed"
+6. Message user with the graduation details from the tool response
 ```
 
 ### Step 4: Near-miss handling

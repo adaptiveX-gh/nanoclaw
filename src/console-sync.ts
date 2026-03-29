@@ -256,7 +256,10 @@ async function fetchAnthropicUsage(config: SyncConfig): Promise<void> {
   });
   if (res.ok) {
     const body = await res.json();
-    logger.info({ days: body.days?.length ?? 0 }, '[console-sync] Usage fetch complete');
+    logger.info(
+      { days: body.days?.length ?? 0 },
+      '[console-sync] Usage fetch complete',
+    );
   } else {
     logger.warn(`[console-sync] Usage fetch failed: ${res.status}`);
   }
