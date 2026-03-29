@@ -1,6 +1,23 @@
+---
+name: signal-webhooks
+description: >
+  Outbound signal delivery via webhooks. Push trading signals from paper bots
+  to external services (Katoshi, Telegram, Google Sheets, etc.) in real-time.
+  Config stored in Supabase webhook_configs table, delivery by bot-runner locally.
+  Trigger on: "webhook", "signal webhook", "create webhook", "webhook status",
+  "delivery stats", "katoshi setup"
+---
+
 # Signal Webhooks — Outbound Signal Delivery
 
 Push trading signals from your paper bots to external services in real-time.
+
+## Architecture
+
+Webhook config is stored in Supabase `webhook_configs` table (managed by the console UI).
+Bot-runner reads config from Supabase, delivers payloads locally, and pushes delivery stats
+back to the `stats` JSONB column. MCP tools below also work for CRUD — they write to the
+same Supabase table so console and agent stay in sync.
 
 ## Tools
 
