@@ -59,6 +59,9 @@ const BOT_IMAGE =
 const CONTAINER_PREFIX = 'nanoclaw-bot-';
 const FT_API_USERNAME = 'freqtrade';
 
+// Signal marketplace: track trade counts to detect new trades
+const lastTradeCount = new Map<string, number>();
+
 // ─── Types ──────────────────────────────────────────────────────────
 
 interface BotRequest {
@@ -578,6 +581,69 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
   );
 }
 
+// ─── Signal Marketplace Publishing ───────────────────────────────────
+
+async function publishSignalEvent(
+  deploymentId: string,
+  status: BotStatusFile,
+): Promise<void> {
+  const signalEnv = readEnvFile([
+    'CONSOLE_SUPABASE_URL',
+    'CONSOLE_SUPABASE_ANON_KEY',
+    'CONSOLE_OPERATOR_ID',
+  ]);
+  const supabaseUrl = (
+    process.env.CONSOLE_SUPABASE_URL || signalEnv.CONSOLE_SUPABASE_URL || ''
+  ).replace(/\/+$/, '');
+  const anonKey =
+    process.env.CONSOLE_SUPABASE_ANON_KEY || signalEnv.CONSOLE_SUPABASE_ANON_KEY || '';
+  const operatorId =
+    process.env.CONSOLE_OPERATOR_ID || signalEnv.CONSOLE_OPERATOR_ID || '';
+
+  if (!supabaseUrl || !anonKey || !operatorId) return;
+
+  // Check if this deployment has an active catalog entry
+  const catalogUrl = `${supabaseUrl}/rest/v1/signal_catalog?publisher_id=eq.${operatorId}&strategy_name=eq.${encodeURIComponent(status.strategy || '')}&pair=eq.${encodeURIComponent(status.pair || '')}&status=eq.active&limit=1`;
+  const catalogRes = await fetch(catalogUrl, {
+    headers: {
+      'apikey': anonKey,
+      'Authorization': `Bearer ${anonKey}`,
+    },
+  });
+  if (!catalogRes.ok) return;
+  const catalogs = await catalogRes.json();
+  if (!Array.isArray(catalogs) || catalogs.length === 0) return;
+
+  const catalog = catalogs[0];
+
+  // Publish signal event
+  const signalEvent = {
+    catalog_id: catalog.id,
+    publisher_id: operatorId,
+    signal_type: 'entry',
+    direction: 'long',
+    pair: catalog.pair,
+    timeframe: catalog.timeframe,
+    archetype: catalog.archetype,
+    paper_pnl_snapshot: status.paper_pnl || {},
+  };
+
+  await fetch(`${supabaseUrl}/rest/v1/signal_events`, {
+    method: 'POST',
+    headers: {
+      'apikey': anonKey,
+      'Authorization': `Bearer ${anonKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(signalEvent),
+  });
+
+  logger.info(
+    { deploymentId, catalogId: catalog.id },
+    'Signal event published to marketplace',
+  );
+}
+
 // ─── Request Processing ─────────────────────────────────────────────
 
 async function processRequest(requestFile: string): Promise<void> {
@@ -851,7 +917,20 @@ async function healthCheckBots(): Promise<void> {
       }
 
       // Fetch profit data for status file
-      await getBotStatus(deploymentId);
+      const status = await getBotStatus(deploymentId);
+
+      // Signal marketplace: detect new trades and publish signal events
+      try {
+        const tradeCount = status.paper_pnl?.trade_count ?? 0;
+        const prevCount = lastTradeCount.get(deploymentId) ?? tradeCount;
+        lastTradeCount.set(deploymentId, tradeCount);
+
+        if (tradeCount > prevCount && tradeCount > 0) {
+          await publishSignalEvent(deploymentId, status);
+        }
+      } catch {
+        // Non-critical — signal publishing failure should never break health checks
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.debug(
