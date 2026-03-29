@@ -47,6 +47,7 @@ container/freqtrade-mcp/
 # Application overview (local only)
 APPLICATION_OVERVIEW.md
 CONSOLE_PRD.md
+SYSTEM_DETAILS.MD
 
 #Claude Directory
 .claude/

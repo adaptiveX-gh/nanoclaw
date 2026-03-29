@@ -109,6 +109,34 @@ function loadDeployments(): any[] {
   return allDeployments;
 }
 
+function loadCampaigns(): { campaigns: any[]; budget: any | null } {
+  // Campaigns live under groups/<folder>/research-planner/campaigns.json
+  const allCampaigns: any[] = [];
+  let budget: any | null = null;
+  try {
+    if (!fs.existsSync(GROUPS_DIR)) return { campaigns: [], budget: null };
+    for (const folder of fs.readdirSync(GROUPS_DIR)) {
+      const campaignsFile = path.join(
+        GROUPS_DIR,
+        folder,
+        'research-planner',
+        'campaigns.json',
+      );
+      if (!fs.existsSync(campaignsFile)) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(campaignsFile, 'utf-8'));
+        if (data.campaigns) allCampaigns.push(...data.campaigns);
+        if (data.budget && !budget) budget = data.budget;
+      } catch {
+        // skip malformed files
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { campaigns: allCampaigns, budget };
+}
+
 function loadGroupsFromDb(db: Database): any[] {
   try {
     const rows = db.prepare('SELECT * FROM registered_groups').all() as any[];
@@ -280,6 +308,7 @@ export async function runConsoleSync(
   // Collect local data
   const bots = loadBotStatuses(dataDir);
   const deployments = loadDeployments();
+  const { campaigns, budget: campaignBudget } = loadCampaigns();
   const groups = loadGroupsFromDb(db);
   const tasks = loadTasksFromDb(db);
 
@@ -304,7 +333,8 @@ export async function runConsoleSync(
     deployments,
     events,
     roster: research.roster,
-    campaigns: research.campaigns,
+    campaigns,
+    campaign_budget: campaignBudget,
     cell_grid: research.cellGrid,
     missed_opportunities: research.missedOpportunities,
   };

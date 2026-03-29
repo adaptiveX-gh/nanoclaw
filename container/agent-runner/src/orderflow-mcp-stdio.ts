@@ -192,11 +192,11 @@ Use for comprehensive multi-timeframe analysis of a single asset.`,
   },
 );
 
-// Tool 3: Fetch microstructure data
+// Tool 3: Fetch microstructure data (aggregated from signal + vpin endpoints)
 server.tool(
   'orderflow_fetch_microstructure',
   `Fetch microstructure data for one or more symbols.
-Returns: aggressor ratio, whale flow delta/magnitude, book imbalance, derived biases (accumulation/distribution, buying/selling, bid_heavy/ask_heavy).
+Returns: aggressor ratio, whale flow delta/magnitude, book imbalance, derived biases (accumulation/distribution, buying/selling, bid_heavy/ask_heavy), VPIN toxicity, and signal components.
 Use for execution quality assessment and market depth analysis.`,
   {
     symbols: z.array(z.string()).describe('List of symbols (e.g. ["BTC", "ETH"])'),
@@ -204,10 +204,72 @@ Use for execution quality assessment and market depth analysis.`,
   },
   async (args) => {
     try {
-      const params = new URLSearchParams({ symbols: args.symbols.join(','), horizon: args.horizon });
-      const response = await apiFetch<{ readings: Record<string, unknown>[] }>(`/api/v1/microstructure?${params}`);
-      const readings = (response.readings || []).map(normalizeMicrostructure);
-      log(`Fetched microstructure for ${readings.length} symbols`);
+      const readings = await Promise.all(
+        args.symbols.map(async (symbol) => {
+          const [signalResult, vpinResult] = await Promise.allSettled([
+            apiFetch<{
+              symbol: string;
+              horizon: string;
+              signal_direction: string;
+              signal_strength: number;
+              entry_confidence: string;
+              position_size_mult: number;
+              components: Record<string, number>;
+              updated_at: string;
+            }>(`/api/v1/signal/${symbol}?horizon=${args.horizon}`),
+            apiFetch<{
+              symbol: string;
+              vpin: number;
+              is_elevated: boolean;
+              is_extreme: boolean;
+            }>(`/api/v1/vpin/${symbol}`),
+          ]);
+
+          const sig = signalResult.status === 'fulfilled' ? signalResult.value : null;
+          const vpinData = vpinResult.status === 'fulfilled' ? vpinResult.value : null;
+
+          if (!sig) {
+            // Fallback: return neutral reading so scoring can proceed
+            return normalizeMicrostructure({ symbol, horizon: args.horizon });
+          }
+
+          const c = sig.components;
+          // delta_momentum: roughly -100..100 → normalize to 0..1 (0.5 = neutral)
+          const rawMomentum = c.delta_momentum ?? 0;
+          const aggressorRatio = Math.max(0, Math.min(1, (rawMomentum + 100) / 200));
+          // large_trades: positive = buy-heavy, negative = sell-heavy
+          const whaleFlowDelta = c.large_trades ?? 0;
+          // imbalance_skew: roughly -100..100 → normalize to -1..1
+          const bookImbalance = (c.imbalance_skew ?? 0) / 100;
+
+          return {
+            symbol,
+            pair: `${symbol}/USDT`,
+            horizon: sig.horizon,
+            aggressorRatio: Math.round(aggressorRatio * 1000) / 1000,
+            aggressorBias: aggressorRatio > 0.55 ? 'accumulation' : aggressorRatio < 0.45 ? 'distribution' : 'neutral',
+            whaleFlowDelta: Math.round(whaleFlowDelta * 100) / 100,
+            whaleFlowMagnitude: Math.round(Math.abs(whaleFlowDelta) * 100) / 100,
+            whaleBias: whaleFlowDelta > 20 ? 'buying' : whaleFlowDelta < -20 ? 'selling' : 'neutral',
+            bookImbalance: Math.round(bookImbalance * 1000) / 1000,
+            bookImbalanceEma: Math.round(bookImbalance * 1000) / 1000,
+            bookBias: bookImbalance > 0.15 ? 'bid_heavy' : bookImbalance < -0.15 ? 'ask_heavy' : 'balanced',
+            vpin: vpinData?.vpin ?? null,
+            vpinElevated: vpinData?.is_elevated ?? null,
+            vpinExtreme: vpinData?.is_extreme ?? null,
+            signalDirection: sig.signal_direction,
+            signalStrength: sig.signal_strength,
+            entryConfidence: sig.entry_confidence,
+            positionSizeMult: sig.position_size_mult,
+            components: c,
+            timestamp: sig.updated_at,
+            dataAge: Math.round((Date.now() - new Date(sig.updated_at).getTime()) / 1000),
+          };
+        }),
+      );
+
+      const valid = readings.filter((r) => !('error' in r));
+      log(`Fetched microstructure for ${valid.length}/${args.symbols.length} symbols`);
       return ok({ success: true, readings });
     } catch (e) {
       return err(`Failed to fetch microstructure: ${(e as Error).message}`);
