@@ -330,12 +330,16 @@ function buildContainerArgs(
   }
 
   // Forward Supabase settings to container for signal marketplace
-  const supabaseKeys = ['CONSOLE_SUPABASE_URL', 'CONSOLE_SUPABASE_ANON_KEY', 'CONSOLE_OPERATOR_ID'];
+  const supabaseKeys = [
+    'CONSOLE_SUPABASE_URL',
+    'CONSOLE_SUPABASE_ANON_KEY',
+    'CONSOLE_OPERATOR_ID',
+  ];
   const supabaseEnv = readEnvFile(supabaseKeys);
   const supabaseMapping: Record<string, string> = {
-    'CONSOLE_SUPABASE_URL': 'SUPABASE_URL',
-    'CONSOLE_SUPABASE_ANON_KEY': 'SUPABASE_ANON_KEY',
-    'CONSOLE_OPERATOR_ID': 'CONSOLE_OPERATOR_ID',
+    CONSOLE_SUPABASE_URL: 'SUPABASE_URL',
+    CONSOLE_SUPABASE_ANON_KEY: 'SUPABASE_ANON_KEY',
+    CONSOLE_OPERATOR_ID: 'CONSOLE_OPERATOR_ID',
   };
   for (const key of supabaseKeys) {
     const val = process.env[key] || supabaseEnv[key];

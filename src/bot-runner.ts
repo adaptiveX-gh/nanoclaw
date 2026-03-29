@@ -593,10 +593,14 @@ async function publishSignalEvent(
     'CONSOLE_OPERATOR_ID',
   ]);
   const supabaseUrl = (
-    process.env.CONSOLE_SUPABASE_URL || signalEnv.CONSOLE_SUPABASE_URL || ''
+    process.env.CONSOLE_SUPABASE_URL ||
+    signalEnv.CONSOLE_SUPABASE_URL ||
+    ''
   ).replace(/\/+$/, '');
   const anonKey =
-    process.env.CONSOLE_SUPABASE_ANON_KEY || signalEnv.CONSOLE_SUPABASE_ANON_KEY || '';
+    process.env.CONSOLE_SUPABASE_ANON_KEY ||
+    signalEnv.CONSOLE_SUPABASE_ANON_KEY ||
+    '';
   const operatorId =
     process.env.CONSOLE_OPERATOR_ID || signalEnv.CONSOLE_OPERATOR_ID || '';
 
@@ -606,8 +610,8 @@ async function publishSignalEvent(
   const catalogUrl = `${supabaseUrl}/rest/v1/signal_catalog?publisher_id=eq.${operatorId}&strategy_name=eq.${encodeURIComponent(status.strategy || '')}&pair=eq.${encodeURIComponent(status.pair || '')}&status=eq.active&limit=1`;
   const catalogRes = await fetch(catalogUrl, {
     headers: {
-      'apikey': anonKey,
-      'Authorization': `Bearer ${anonKey}`,
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
     },
   });
   if (!catalogRes.ok) return;
@@ -631,8 +635,8 @@ async function publishSignalEvent(
   await fetch(`${supabaseUrl}/rest/v1/signal_events`, {
     method: 'POST',
     headers: {
-      'apikey': anonKey,
-      'Authorization': `Bearer ${anonKey}`,
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(signalEvent),
