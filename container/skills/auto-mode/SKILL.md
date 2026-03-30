@@ -1430,14 +1430,187 @@ After graduating a strategy and launching its paper bot:
   agent_post_status("Publishing signals for {strategy} on {pair}/{tf}", tags: ["auto_mode", "discovery"])
 
 
+## Paper Bot Validation (every health check)
+
+For every campaign with state == "paper_trading" in
+`/workspace/group/research-planner/campaigns.json`:
+
+### Step 1: Read status
+
+  Read bot status for campaign.paper_trading.bot_deployment_id
+  Extract: trade_count, profit_pct, sharpe (from trade history),
+    max_drawdown, last_trade_at
+
+### Step 2: Update metrics
+
+  campaign.paper_trading.current_pnl_pct = profit_pct
+  campaign.paper_trading.current_trade_count = trade_count
+  campaign.paper_trading.current_sharpe = sharpe
+  campaign.paper_trading.current_max_dd = max_drawdown
+  campaign.paper_trading.last_checked = now
+
+  Append to timeline: { state: "paper_trading", timestamp: now,
+    reason: "health_check", metrics: { pnl, trades, sharpe, max_dd } }
+
+  Sync: sync_state_to_supabase(state_key="campaigns", ...)
+
+### Step 3: Check early retirement triggers
+
+  Read archetype config:
+    max_dd = archetype.graduation_gates.max_drawdown_pct
+    validation = archetype.graduation_gates.paper_validation[timeframe]
+
+  EARLY RETIRE if ANY of:
+    a. max_drawdown > max_dd × 1.5
+       Reason: "drawdown_exceeded"
+    b. Zero trades AND elapsed > validation.days × 0.25
+       Reason: "no_signals"
+    c. 5+ consecutive losing trades AND total loss > 5%
+       Reason: "consecutive_losses"
+
+  If early retire triggered:
+    → Stop bot: bot_stop(deployment_id)
+    → campaign.state = "retired"
+    → Append to timeline: { state: "retired", timestamp: now,
+        reason: "{early_retire_reason}" }
+    → Free slot
+    → aphexdata_record_event(verb_id="paper_bot_retired_early",
+        result_data={ strategy, pair, reason, elapsed_days, metrics })
+    → Post to feed: "Early retirement: {strategy} on {pair}/{tf}
+      — {reason} after {days} days"
+      tags: ["retirement"]
+    → Return (skip remaining steps for this campaign)
+
+### Step 4: Check validation deadline
+
+  deadline = campaign.paper_trading.deployed_at + validation.days
+
+  If now < deadline:
+    → Still validating. Log status only.
+    → aphexdata_record_event(verb_id="paper_bot_checked",
+        result_data={ strategy, pair, elapsed_days, metrics })
+    → Return
+
+  If now >= deadline:
+    → Validation period complete. Evaluate.
+
+### Step 5: Graduate or retire
+
+  Read criteria:
+    min_trades = validation.min_trades
+    min_sharpe = validation.min_live_sharpe
+    max_dd = archetype.graduation_gates.max_drawdown_pct
+
+  If ALL pass:
+    current_trade_count >= min_trades
+    current_sharpe >= min_sharpe
+    abs(current_max_dd) <= max_dd
+
+  THEN GRADUATE:
+    1. Write header tags to strategy .py file:
+       # ARCHETYPE: {archetype}
+       # GRADUATED: {date}
+       # LIVE_VALIDATED: {validation_days} days
+       # LIVE_SHARPE: {sharpe}
+       # LIVE_TRADES: {trade_count}
+       # LIVE_PNL: {pnl_pct}%
+       # VALIDATED_PAIRS: {pair}
+       # REGIME_GATED: {true/false}
+
+    2. Add to roster.json as graduated deployment
+
+    3. campaign.state = "graduated"
+       campaign.graduation = {
+         graduated_at: now,
+         live_sharpe: current_sharpe,
+         live_trades: current_trade_count,
+         live_pnl_pct: current_pnl_pct,
+         live_max_dd: current_max_dd
+       }
+       Append to timeline: { state: "graduated", timestamp: now,
+         reason: "validation_passed", metrics }
+
+    4. Keep bot running — it's now a graduated deployment
+
+    5. If current_sharpe >= config.graduation.signal_publishing_sharpe (0.8):
+       Flag for signal publishing: "Quality exceeds publishing threshold"
+
+    6. aphexdata_record_event(verb_id="strategy_graduated_live", ...)
+
+    7. Post to feed: "GRADUATED: {strategy} on {pair}/{tf}
+       — {days} days live, Sharpe {sharpe}, {trades} trades, P&L {pnl}%"
+       tags: ["graduation"]
+
+    8. Message user:
+       "{strategy} graduated from live paper trading!
+        Live Sharpe: {sharpe} | Trades: {trades} | P&L: {pnl}%
+        Validated over {days} days. Bot stays active.
+        {If sharpe > 0.8: 'Quality exceeds publishing threshold — consider publishing signals.'}"
+
+    9. Trigger cross-pair sweep (next daily planning cycle)
+
+  ELSE RETIRE:
+    → Stop bot: bot_stop(deployment_id)
+    → campaign.state = "retired"
+    → Log failure reason:
+      trades < min: "insufficient_trades"
+      sharpe < min: "low_sharpe"
+      dd > max: "excessive_drawdown"
+    → Append to timeline: { state: "retired", timestamp: now,
+        reason: "{failure_reason}", metrics }
+    → aphexdata_record_event(verb_id="paper_bot_retired", ...)
+    → Post to feed: "Retired: {strategy} on {pair}/{tf} — {reason}"
+      tags: ["retirement"]
+
+### Step 6: Fill empty slots
+
+  active_count = count campaigns where state == "paper_trading"
+  available = config.paper_trading.max_paper_bots - active_count
+
+  If available > 0 AND config.paper_trading.auto_deploy_triage_winners:
+    Read /workspace/group/research-planner/triage-matrix.json
+    winners = triage_matrix.winners where deployed_as_paper == false
+    Sort by (archetype_coverage_gap DESC, favorable_sharpe DESC)
+
+    archetype_coverage_gap: count paper_trading campaigns per archetype,
+    prioritize archetypes with fewer active paper bots.
+
+    For next winner with favorable_sharpe >= 0.5:
+      Pre-flight validation (30s sanity backtest)
+      If passes:
+        Deploy paper bot (bot_start, dry_run=true)
+        Create campaign with state: paper_trading
+        Set validation deadline from archetypes.yaml paper_validation[timeframe]
+        Mark winner as deployed_as_paper: true in triage-matrix.json
+        Post to feed: "Auto-filling slot: {strategy} on {pair}/{tf}
+          — favorable Sharpe {n}"
+          tags: ["deployment", "triage"]
+        Sync campaigns and triage matrix to Supabase
+
+  This creates a pull system: as bots graduate or retire,
+  new candidates automatically fill empty slots from the triage matrix.
+
+### Validation Period Reference Table
+
+| Timeframe | Days | Min Trades | Rationale |
+|-----------|------|------------|-----------|
+| 5m        | 1-2  | 40-100     | High-frequency, enough data in hours |
+| 15m       | 2-3  | 15-50      | Intraday, 3 days covers multiple cycles |
+| 1h        | 5-14 | 5-15       | Standard swing, full week of market |
+| 4h        | 14-21| 5-10       | Multi-day holds, need 2 weeks |
+| 1d        | 30   | 3-5        | Position trading, full month minimum |
+
+Exact values per archetype are in archetypes.yaml paper_validation section.
+
+
 ## Idle-Time Triage Trigger
 
-After completing all health check steps, check whether to run
-a triage cycle:
+After completing all health check steps (including Paper Bot Validation),
+check whether to run a triage cycle:
 
 PREREQUISITES (all must be true):
   - This health check was ROUTINE (no deployment state changes,
-    no circuit breaker events, no alerts triggered)
+    no circuit breaker events, no paper bot graduations/retirements)
   - No triage cycle has run in the last 3 minutes
     (check triage-matrix.json last_cycle timestamp)
   - Next scheduled task is > 5 minutes away
@@ -1446,13 +1619,16 @@ PREREQUISITES (all must be true):
 If all prerequisites met:
   Run ONE triage cycle per research-planner SKILL.md Part 3C
   This takes 30 seconds for a normal Result B/C, or up to
-  3 minutes if a Result A triggers immediate walk-forward
+  3 minutes if a Result A triggers immediate walk-forward.
+  If the triage produces a winner with favorable_sharpe >= 0.5
+  AND paper bot slots are available, the triage cycle itself
+  deploys the paper bot (see Part 3C, Step 4, Result A).
 
 If any prerequisite fails:
   Skip triage, go idle normally
 
 IMPORTANT: Do NOT run triage on health checks that produced
 state changes (deployment transitions, throttle/pause events,
-circuit breaker activation). Those checks are already
-information-dense and the session should close cleanly without
-adding a backtest.
+circuit breaker activation, paper bot graduation/retirement).
+Those checks are already information-dense and the session
+should close cleanly without adding a backtest.

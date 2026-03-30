@@ -436,6 +436,19 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
   };
   log(`MCP: orderflow enabled (url=${orderflowUrl})`);
 
+  // X (Twitter): browser automation for posting/liking/replying (main group only)
+  if (containerInput.isMain) {
+    servers.x = {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'x-mcp-stdio.js')],
+      env: {
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: '1',
+      },
+    };
+    log('MCP: x enabled (main group)');
+  }
+
   log(`MCP servers: ${Object.keys(servers).join(', ')}`);
   return servers;
 }
@@ -542,6 +555,7 @@ async function runQuery(
         'mcp__swarm__*',
         'mcp__clawteam__*',
         'mcp__orderflow__*',
+        'mcp__x__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
