@@ -41,8 +41,18 @@ cat /workspace/skills/archetype-taxonomy/archetypes.yaml
 ```
 orderflow_scan_opportunities(min_conviction=0)
 ```
-This returns regime + conviction for all 22 tracked symbols across all 5 horizons.
+This returns regime + conviction + `liquidity_percentile` for all 22 tracked symbols across all 5 horizons.
 Filter to the 20 grid pairs and the relevant horizons.
+
+**1b-extra. Extract volume weights from regime data**
+
+From the Phase 1b scan results, for each pair extract `liquidity_percentile` (0–100).
+Compute `volume_weight` per pair:
+```
+max_liq = max(liquidity_percentile across all 20 pairs)
+volume_weight[pair] = liquidity_percentile[pair] / max_liq   # normalized 0.0–1.0
+```
+If `max_liq == 0` or liquidity data is unavailable, set `volume_weight = 1.0` for all pairs.
 
 **1c. Fetch microstructure for all pairs**
 ```
@@ -61,6 +71,16 @@ cat /workspace/group/reports/sentiment-latest.json 2>/dev/null || echo "{}"
 ```bash
 cat /workspace/group/reports/cell-grid-latest.json 2>/dev/null || echo "[]"
 ```
+
+**1e-extra. Compute trend_boost from previous grid**
+
+For each cell `(archetype, pair, timeframe)`, look up its `composite` in the previous grid:
+- If previous composite exists:
+  - `delta = current_composite - previous_composite`
+  - `delta > 0.3` → `trend_boost = +0.2` (rising)
+  - `delta < -0.3` → `trend_boost = -0.1` (falling)
+  - else → `trend_boost = 0.0` (flat)
+- If no previous data → `trend_boost = 0.0`
 
 ### Phase 2: Score All 560 Cells
 
@@ -114,9 +134,15 @@ Use the best WF Sharpe found:
 
 If no backtest data exists for this cell, score **0** (no edge proven).
 
-**2d. Compute composite**
+**2d. Compute composite + priority fields**
 ```
 composite = (regime_fit × 0.4) + (execution_fit × 0.25) + (net_edge × 0.35)
+```
+
+Attach volume_weight (from Phase 1b-extra) and trend_boost (from Phase 1e-extra) to each cell.
+Compute adjusted_priority for ranking (not stored separately):
+```
+adjusted_priority = composite × volume_weight × (1 + trend_boost)
 ```
 
 **2e. Apply macro overlay (optional boost/penalty)**
@@ -129,7 +155,11 @@ If macro context reports are available:
 
 ### Phase 3: Rank & Apply Portfolio Constraints
 
-**3a. Sort all 560 cells by composite score (descending)**
+**3a. Sort all 560 cells by adjusted_priority (descending)**
+
+```
+adjusted_priority = composite × volume_weight × (1 + trend_boost)
+```
 
 **3b. Apply portfolio constraints (from archetypes.yaml)**
 
@@ -202,6 +232,19 @@ For each current deployment NOT in the target list:
 ### Phase 6: Store & Log
 
 **6a. Save cell grid snapshot**
+
+Each cell in the JSON array must include `volume_weight` and `trend_boost`:
+```json
+{
+  "archetype": "TREND_MOMENTUM", "pair": "BTC/USDT:USDT", "timeframe": "1h",
+  "regime": "EFFICIENT_TREND", "conviction": 78,
+  "regime_fit": 5, "execution_fit": 4, "net_edge": 5, "composite": 4.8,
+  "volume_weight": 0.95, "trend_boost": 0.2,
+  "deployed_strategy": "TrendV4_BTC", "deployment_id": "wolfclaw-btc-1h",
+  "scored_at": "2026-03-31T12:34:28Z"
+}
+```
+
 ```bash
 # Write the full 560-cell grid with scores to workspace
 cat > /workspace/group/reports/cell-grid-latest.json << 'EOF'
@@ -228,6 +271,8 @@ aphexdata_record_event(
     "actions_undeploy": <count>,
     "actions_hold": <count>,
     "top_cell": {"archetype": "...", "pair": "...", "timeframe": "...", "composite": 4.8},
+    "volume_weight_range": {"min": 0.12, "avg": 0.65, "max": 1.0},
+    "trend_distribution": {"rising": <count>, "flat": <count>, "falling": <count>},
     "portfolio_dd_pct": <current>,
     "circuit_breaker_active": false
   }

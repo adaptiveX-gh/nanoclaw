@@ -63,6 +63,10 @@ const FT_API_USERNAME = 'freqtrade';
 // Signal marketplace: track trade counts to detect new trades
 const lastTradeCount = new Map<string, number>();
 
+// Track consecutive 401 counts per bot for stale-proxy detection
+const consecutiveAuthFailures = new Map<string, number>();
+const AUTH_FAILURE_RESTART_THRESHOLD = 3; // restart container after 3 consecutive 401s
+
 // ─── Types ──────────────────────────────────────────────────────────
 
 interface BotRequest {
@@ -436,6 +440,23 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
   const timeframe = req.timeframe || '1h';
   const dryRun = req.dry_run !== false;
 
+  // If this bot is already running in activeBots, reuse its port and stop the
+  // existing container before regenerating the config.  This avoids the race
+  // window where config.json is overwritten with a new password while the old
+  // container is still live (NanoClaw restart between write and docker-rm would
+  // leave recovery reading a password the container was never started with).
+  const existingBot = activeBots.get(deploymentId);
+  if (existingBot) {
+    logger.info(
+      { deploymentId, existingPort: existingBot.port },
+      'start_bot called for already-running bot — stopping existing container first',
+    );
+    // Release the old port so allocatePort() can reuse it
+    portMap.delete(existingBot.port);
+    removeContainer(containerName);
+    activeBots.delete(deploymentId);
+  }
+
   // Allocate port
   const port = allocatePort();
   if (port === null) {
@@ -452,7 +473,13 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
     );
   }
 
-  // Generate password and config
+  // Remove existing container BEFORE writing the new config so the race window
+  // between "config overwritten with P2" and "old container still running with P1"
+  // is eliminated.  If NanoClaw crashes after this point, recovery will find no
+  // running container and the orphan config is harmless.
+  removeContainer(containerName);
+
+  // Generate password and config (written AFTER the old container is gone)
   const password = generatePassword();
   const configPath = generateBotConfig(
     deploymentId,
@@ -463,9 +490,6 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
     password,
     dryRun,
   );
-
-  // Remove existing container if present (stale from prior run)
-  removeContainer(containerName);
 
   // Build docker run command
   const strategiesDir = path.dirname(strategyFile);
@@ -1066,6 +1090,49 @@ async function healthCheckBots(): Promise<void> {
         bot.status = 'running';
         bot.error = undefined;
         logger.info({ deploymentId }, 'Bot recovered from error state');
+      }
+
+      // Verify auth works — detect Docker Desktop stale port-proxy (gives 401 from
+      // host even though container is healthy and password is correct).
+      // After AUTH_FAILURE_RESTART_THRESHOLD consecutive 401s on /profit, restart
+      // the container to force Docker Desktop to refresh its proxy table.
+      const authCheckRes = await ftApiCall(
+        bot.port,
+        'GET',
+        'profit',
+        bot.password,
+      ).catch(() => ({ status: 0, body: '' }));
+
+      if (authCheckRes.status === 401) {
+        const failures = (consecutiveAuthFailures.get(deploymentId) ?? 0) + 1;
+        consecutiveAuthFailures.set(deploymentId, failures);
+        logger.warn(
+          { deploymentId, consecutiveFailures: failures },
+          'Bot API returned 401 — possible stale Docker proxy',
+        );
+        if (failures >= AUTH_FAILURE_RESTART_THRESHOLD) {
+          logger.warn(
+            { deploymentId },
+            `${AUTH_FAILURE_RESTART_THRESHOLD} consecutive 401s — restarting container to refresh Docker port proxy`,
+          );
+          try {
+            dockerExec(['restart', bot.containerName]);
+            consecutiveAuthFailures.set(deploymentId, 0);
+            logger.info(
+              { deploymentId },
+              'Container restarted — Docker port proxy refreshed',
+            );
+          } catch (restartErr) {
+            logger.error(
+              { deploymentId, err: String(restartErr) },
+              'Failed to restart container for proxy refresh',
+            );
+          }
+        }
+        continue;
+      } else {
+        // Auth succeeded — reset failure counter
+        consecutiveAuthFailures.set(deploymentId, 0);
       }
 
       // Re-send start command if signals should be active but FreqTrade
