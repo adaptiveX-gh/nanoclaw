@@ -386,6 +386,25 @@ async function deliverWebhook(
   };
 }
 
+// ─── Signal gating by campaign state ─────────────────────────────────
+
+/**
+ * Only graduated campaigns (proven or published) should fire webhooks.
+ * Warm-up bots trade internally — FreqTrade tracks P&L but no external signals.
+ */
+export function shouldFireWebhook(campaign: { state: string } | null | undefined): boolean {
+  return campaign?.state === 'graduated';
+}
+
+/**
+ * Only graduated campaigns with live Sharpe >= 0.8 publish to marketplace.
+ * Below 0.8 = personal webhooks only. Above 0.8 = marketplace + personal.
+ */
+export function shouldPublishToMarketplace(campaign: { state: string; graduation?: { live_sharpe?: number | null } } | null | undefined): boolean {
+  return campaign?.state === 'graduated'
+    && ((campaign.graduation?.live_sharpe ?? 0) >= 0.8);
+}
+
 // ─── Main dispatch (called by bot-runner) ────────────────────────────
 
 export async function dispatchSignal(
@@ -394,7 +413,13 @@ export async function dispatchSignal(
   deployment: any | null,
   marketPrior: any | null,
   env: Record<string, string>,
+  campaign?: { state: string; graduation?: { live_sharpe?: number | null } } | null,
 ): Promise<DeliveryResult[]> {
+  // Gate: only fire webhooks for graduated campaigns
+  if (campaign && !shouldFireWebhook(campaign)) {
+    return [];
+  }
+
   const webhooks = loadWebhooks();
   const results: DeliveryResult[] = [];
 

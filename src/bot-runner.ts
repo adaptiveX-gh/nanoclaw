@@ -358,6 +358,7 @@ function generateBotConfig(
     max_open_trades: 1,
     dry_run: dryRun,
     dry_run_wallet: 1000,
+    db_url: 'sqlite:////freqtrade/user_data/data/tradesv3.dryrun.sqlite',
     exchange: {
       name: 'binance',
       pair_whitelist: [pair],
