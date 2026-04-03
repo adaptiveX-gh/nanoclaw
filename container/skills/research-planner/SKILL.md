@@ -80,6 +80,119 @@ a researcher reach for to solve THIS specific problem?"
 
 
 ===============================================================================
+STEP 0: DIAGNOSE DEPLOYED BOTS
+===============================================================================
+
+Before looking for new gaps, check why existing bots aren't trading.
+A validated strategy that isn't firing is more urgent than a new
+strategy that doesn't exist yet.
+
+### 0a. Find silent bots
+
+  Read campaigns.json. For each campaign with state == "paper_trading"
+  OR state == "graduated":
+
+    If current_trade_count == 0 AND elapsed > 24 hours:
+      → This bot is SILENT. It's deployed but not generating signals.
+      Add to silent_bots list.
+
+    If current_trade_count > 0 AND last_trade > 48 hours ago:
+      → This bot has STALLED. It was trading but stopped.
+      Add to stalled_bots list.
+
+  If silent_bots + stalled_bots is empty:
+    → All bots are trading normally. Skip to Step 1.
+
+### 0b. Diagnose each silent/stalled bot
+
+  For each silent or stalled bot, diagnose the cause:
+
+  CHECK 1: Is the regime blocking entry?
+    Read the bot's cell composite score from market-prior.json.
+
+    If composite < 3.5 (signals_active == false):
+      → Regime is unfavorable. This is expected behavior.
+      → Log: "{strategy} on {pair}/{tf}: signals OFF, composite {score}.
+        Waiting for regime. No action needed."
+      → Note: if composite is CLOSE (3.0-3.5), flag it:
+        "Composite {score} — approaching threshold. May activate soon."
+
+    If composite >= 3.5 (signals_active == true) but still 0 trades:
+      → Signals are ON but nothing triggered. Proceed to Check 2.
+
+  CHECK 2: Are entry conditions too strict?
+    Pull the last 50 candles for this pair/timeframe.
+    Read the strategy .py file to understand entry conditions.
+
+    Check: how close are the indicators to triggering?
+      - RSI at 32 when entry requires < 30? (close)
+      - ADX at 18 when entry requires > 20? (close)
+      - Price 1% above Bollinger lower band? (close)
+
+    If indicators are consistently CLOSE but never crossing:
+      → Entry conditions may be too strict for current volatility.
+      → Recommendation: "Consider a targeted Kata Step 4 experiment
+        to loosen the entry threshold. This is a 15-minute fix that
+        could produce signals today."
+      → Post to feed: "{strategy} on {pair}: indicators approaching
+        but not crossing entry. RSI avg {n} vs threshold {t}.
+        Kata improvement opportunity."
+
+  CHECK 3: Is the timeframe too slow?
+    If timeframe == "1d": expected trade frequency is 2-5/month max.
+      → Log: "1d timeframe — low signal frequency is expected."
+    If timeframe == "4h": expected trade frequency is 5-10/month.
+      → Log: "4h timeframe — moderate frequency."
+    If timeframe == "1h" or faster and still 0 trades after 48h:
+      → Something is likely wrong. Flag for investigation.
+
+  CHECK 4: Is there a technical issue?
+    Is the container actually running? (reconcile with bot status)
+    Is the data feed current? (check last candle timestamp)
+    Is FreqTrade processing candles? (check logs if accessible)
+
+    If technical issue found:
+      → Post to feed: "{strategy}: technical issue — {description}"
+      → Message user: "Bot {strategy} may have a technical issue: {detail}"
+
+### 0c. Decide: fix existing or research new?
+
+  After diagnosing all silent/stalled bots:
+
+  If any bot has indicators CLOSE to triggering AND composite >= 3.5:
+    → PRIORITY: run a quick Kata Step 4 on that bot first.
+    → A 15-minute param adjustment on a validated strategy
+      produces signals faster than a full Kata cycle on a new gap.
+    → This becomes the Round 3 target instead of a new candidate.
+
+  If all silent bots are regime-blocked (composite < 3.5):
+    → Nothing to fix. The system is working correctly.
+    → Proceed to Step 1 (find new gaps).
+
+  If silent bots are on slow timeframes (4h/1d):
+    → Nothing to fix urgently. Low frequency is expected.
+    → But: weight Step 1 gap selection toward faster timeframes
+      (the frequency bonus handles this automatically).
+
+  Post to feed: "Step 0: {n} bots deployed. {silent} silent,
+    {stalled} stalled. Regime-blocked: {k}. Close-to-trigger: {m}.
+    Action: {fix_existing / proceed_to_step1}"
+
+### Tool call budget for Step 0
+
+  Step 0 uses 0-3 tool calls from the parent session:
+    0 calls: all bots trading normally → skip to Step 1
+    1 call: read campaigns.json + market-prior.json (combined)
+    2 calls: pull candles for a silent bot + read its .py file
+    3 calls: investigate 2 silent bots
+
+  If Step 0 finds a bot worth fixing, it becomes the Kata's target:
+    Skip Step 1 (gap selection) and Step 2 (find candidate)
+    Go directly to Step 3 (measure baseline on the fix)
+    or Step 4 (targeted experiment on the entry conditions)
+
+
+===============================================================================
 STEP 1: FIND THE GAP
 ===============================================================================
 
@@ -93,9 +206,26 @@ Correlation groups (from archetypes.yaml):
 
 Count graduates per group. Least-covered group gets highest priority.
 
-  gap_score = (composite x 2) + (hit_count x 0.4)
-            + (group_has_zero_graduates x 5)
-            + (archetype_has_zero_graduates x 3)
+  gap_score = (composite × 2)
+            + (hit_count × 0.4)
+            + (group_has_zero_graduates × 5)
+            + (archetype_has_zero_graduates × 3)
+            + (timeframe_frequency_bonus × 2)
+
+  timeframe_frequency_bonus:
+    5m:  1.0   (highest frequency, fastest validation feedback)
+    15m: 1.0   (high frequency)
+    1h:  0.7   (moderate frequency, good balance of speed + quality)
+    4h:  0.3   (low frequency, slow validation)
+    1d:  0.0   (very low frequency, no urgency bonus)
+
+  This means: when two gaps have similar composite + group diversity,
+  the system prefers shorter timeframes because they produce signals
+  sooner and give faster validation feedback during warm-up.
+
+  A 1h strategy with 15 trades/month graduates in 7 days and gives
+  meaningful live Sharpe. A 1d strategy with 3 trades/month needs
+  30 days and may not reach min_trades. Prioritize signal velocity.
 
 Pick highest gap. Post to feed.
 
@@ -234,14 +364,52 @@ Write: "Obstacle: {what} because {why}. Target: {metric} from {current} to {goal
 STEP 5: DEPLOY
 ===============================================================================
 
+### Deployment feasibility check
+
+  Before starting a paper bot, estimate whether the strategy
+  will produce enough trades during validation:
+
+  # From walk-forward results
+  avg_trades_per_window = mean(trades_per_window from baseline)
+  wf_window_days = ~113  # approximate days per WF window
+  trades_per_day = avg_trades_per_window / wf_window_days
+
+  # Expected trades during validation
+  validation_days = archetypes[archetype].paper_validation[timeframe].days
+  min_trades = archetypes[archetype].paper_validation[timeframe].min_trades
+  expected_trades = trades_per_day × validation_days
+
+  Store in campaign:
+    campaign.paper_trading.expected_trades_in_validation = round(expected_trades)
+    campaign.paper_trading.trades_per_day_estimate = round(trades_per_day, 2)
+
+  If expected_trades < min_trades:
+    → WARNING (don't block deployment — paper trading is free)
+    → Post to feed: "Low-frequency deployment: {strategy} on {pair}/{tf}.
+      Expected ~{expected} trades in {days}d validation, but graduation
+      requires {min}. May need extension or longer validation."
+    → Log: campaign.paper_trading.feasibility_warning = true
+
+  If expected_trades < min_trades × 0.25:
+    → STRONG WARNING
+    → Post: "{strategy} on {pair}/{tf}: expected ~{expected} trades in
+      {days}d — very unlikely to reach {min} trades for graduation.
+      Consider a shorter timeframe for this archetype."
+    → Still deploy (the operator might want the data) but flag clearly.
+
+### Deploy
+
   bot_start_paper(strategy, pair, timeframe, config)
   Read validation period from archetypes.yaml paper_validation[timeframe]
-  Create campaign in campaigns.json
+  Create campaign in campaigns.json (include feasibility fields above)
+  Initialize: ticks_signals_on = 0, ticks_signals_off = 0,
+    extended = false, regime_extension = false
   Write kata-state.json outcome
   sync_state_to_supabase(state_key="campaigns", ...)
 
   Post to feed: "Deployed: {strategy} on {pair}/{tf} — favorable
-    Sharpe {s}. Validating {days} days."
+    Sharpe {s}. Validating {days} days.
+    Expected ~{expected_trades} trades (need {min_trades})."
 
 
 ===============================================================================
@@ -633,6 +801,64 @@ COMMANDS
   "Show triage matrix"         -> tested counts, candidates
   "Run one triage cycle"       -> test one strategy
   "Show portfolio correlation" -> correlation matrix + Sharpe estimate
+  "Adopt {strategy}"           -> Run Kata Steps 3-5 on orphan bot
+
+
+===============================================================================
+ORPHAN RULE
+===============================================================================
+
+Every deployed paper bot MUST have a matching campaign in campaigns.json
+created by the Kata pipeline. A bot without a campaign is an orphan —
+it was deployed manually or adopted without validation.
+
+Orphans are the anti-pattern. TheForce ETH 15m was an orphan: no
+walk-forward, no baseline, no Kata. It became the main source of
+live trades and it was losing.
+
+### Detection
+
+  During auto-mode health check Step 1 (READ STATE):
+    For each running bot in deployments.json:
+      Find matching campaign where
+        campaign.paper_trading.bot_deployment_id == bot.deployment_id
+
+      If no matching campaign found:
+        → This is an ORPHAN.
+        → Check: does the bot have an orphan_detected_at timestamp?
+
+### Adoption window
+
+  When an orphan is first detected:
+    Set orphan_detected_at = now in deployments.json
+    Post to feed: "Orphan detected: {strategy} on {pair}/{tf} has
+      no campaign entry. 48-hour adoption window — run through
+      Kata Steps 3-5 or it will be auto-retired."
+    Message user: "{strategy} is an orphan bot (no Kata validation).
+      To keep it: 'Adopt {strategy}'. To retire: 'Retire {strategy}'.
+      Auto-retires in 48 hours if no action taken."
+
+  "Adopt {strategy}" command:
+    Run Kata Step 3 (measure baseline) on the orphan.
+    If favorable_sharpe >= 0.5:
+      Create campaign entry with state: paper_trading
+      Set validation_deadline based on timeframe
+      Post: "Adopted: {strategy}. Now in warm-up, validating {days}d."
+    If favorable_sharpe < 0.5:
+      Run Kata Step 4 (improve) or retire.
+      Post: "Adoption baseline: favorable Sharpe {s}. Improving or retiring."
+
+  After 48 hours with no adoption:
+    Auto-retire the orphan.
+    bot_stop(deployment_id)
+    Post: "Orphan auto-retired: {strategy}. No campaign after 48h."
+    Free the slot.
+
+### Prevention
+
+  The Kata is the ONLY path to deploying a paper bot.
+  Every bot_start_paper call must be preceded by creating a
+  campaign entry in campaigns.json. No campaign → no deployment.
 
 
 ===============================================================================
@@ -643,7 +869,8 @@ EVENTS (aphexDATA)
   kata_baseline, kata_experiment, kata_worker_spawned,
   kata_worker_completed, kata_deployed, kata_graduated,
   kata_retired, kata_retired_early, kata_cross_pair,
-  triage_tested, triage_winner, portfolio_correlation_update
+  triage_tested, triage_winner, portfolio_correlation_update,
+  orphan_detected, orphan_adopted, orphan_auto_retired
 
 
 ===============================================================================

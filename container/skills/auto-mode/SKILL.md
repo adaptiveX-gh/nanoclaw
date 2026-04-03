@@ -267,6 +267,25 @@ If container is down but campaign says `paper_trading` → log warning,
 don't auto-retire (might be a restart). If container has been down for
 3+ consecutive checks, attempt `bot_start()` to restart it.
 
+**Orphan detection:**
+
+For each running bot (from `bot_list()`):
+  Match to campaign via `campaign.paper_trading.bot_deployment_id == bot.deployment_id`
+
+  If no matching campaign found AND no `orphan_detected_at` set:
+    Set `orphan_detected_at = now` in deployments.json
+    Post to feed: "Orphan detected: {strategy} on {pair}/{tf} — no campaign. 48h to adopt."
+    Message user: "{strategy} is an orphan bot (no Kata validation).
+      'Adopt {strategy}' to keep, 'Retire {strategy}' to stop.
+      Auto-retires in 48 hours if no action taken."
+    `aphexdata_record_event(verb_id="orphan_detected", verb_category="monitoring", object_type="deployment", ...)`
+
+  If `orphan_detected_at` set AND elapsed > 48 hours:
+    Auto-retire: `bot_stop(deployment_id, confirm=true)`
+    Free the slot
+    Post: "Orphan auto-retired: {strategy}. No campaign after 48h."
+    `aphexdata_record_event(verb_id="orphan_auto_retired", verb_category="execution", object_type="deployment", ...)`
+
 ### Step 2: REFRESH REGIMES
 
 Read market-timing scores for each cell.
@@ -298,10 +317,20 @@ If cell_composite < 3.5 for 2 consecutive ticks:
 turning signals off. This prevents churn when composite oscillates
 around 3.5.
 
+**Regime-blocked tracking (for each warm-up bot):**
+```
+If signals_active == true this tick:
+  campaign.paper_trading.ticks_signals_on += 1
+Else:
+  campaign.paper_trading.ticks_signals_off += 1
+```
+These counters let Step 5 (Graduation Check) determine whether a
+zero-trade bot was regime-blocked or genuinely had opportunities.
+
 **For proven/published bots:**
-Same logic. Regime gating applies to all bots regardless of graduation
-status — a proven bot in an unfavorable regime pauses signals until
-conditions improve.
+Same regime gating logic. Regime gating applies to all bots regardless
+of graduation status — a proven bot in an unfavorable regime pauses
+signals until conditions improve. (No tick tracking needed for proven bots.)
 
 ### Step 3: UPDATE METRICS
 
@@ -330,24 +359,59 @@ For each warm-up bot only (proven bots earned their slot):
 Read archetype from `archetypes.yaml`:
 ```
 max_dd = archetype.graduation_gates.max_drawdown_pct
-validation = archetype.graduation_gates.paper_validation[timeframe]
 ```
 
-**RETIRE EARLY if ANY:**
+**TRIGGER A — Catastrophic drawdown (immediate)**
+  `abs(current_max_dd) > max_dd × 1.5`
+  Reason: `"drawdown_exceeded"`
 
-a. `abs(current_max_dd) > max_dd × 1.5`
-   Reason: `"drawdown_exceeded"`
-   (Safety circuit breaker — don't let bad bots hemorrhage)
+  A strategy losing this much is dangerous even on paper.
+  This is a safety circuit breaker, not a performance judgment.
 
-b. `current_trade_count == 0 AND elapsed > validation.days × 0.25`
-   Reason: `"no_signals"`
-   (Strategy isn't generating signals on this pair)
+  → Retire immediately. Stop bot. Free slot.
 
-c. `5+ consecutive losing trades AND total loss > 5%`
-   Reason: `"consecutive_losses"`
-   (Clear negative momentum)
+**TRIGGER B — Dead container (immediate)**
+  Container status != running for 2 consecutive health checks
+  AND no restart detected between checks
+  Reason: `"container_failed"`
 
-**On early retire:**
+  The container crashed and didn't recover. Auto-mode can't
+  restart containers — that's an infrastructure issue.
+
+  → Retire. Free slot. Alert user: "Container down for {strategy}"
+
+**TRIGGER C — Clear negative edge (needs trades)**
+  `current_trade_count >= 5`
+  AND last 5 trades are ALL losses
+  AND cumulative loss from those 5 trades > 5%
+  Reason: `"consecutive_losses"`
+
+  This can only trigger after the strategy has produced enough
+  trades to judge. 5 consecutive losses with >5% total loss is
+  statistically meaningful — this isn't bad luck, it's bad edge.
+
+  → Retire. Stop bot. Free slot.
+
+**THAT'S IT.** Three triggers. Everything else waits for the
+validation deadline in Step 5 (Graduation Check).
+
+What's NOT a retirement trigger:
+  - Zero trades after N hours → NOT a trigger.
+    Step 0 investigates silent bots. The validation deadline
+    catches "not enough trades" at the end. Premature killing
+    wastes validated strategies.
+
+  - Low Sharpe before deadline → NOT a trigger.
+    Sharpe is noisy with small sample sizes. A strategy at
+    -0.2 Sharpe after 3 trades might be +0.5 after 15.
+    Wait for the deadline and min_trades.
+
+  - Regime-blocked signals → NOT a trigger.
+    Signals being OFF because composite < 3.5 is the system
+    working correctly. The strategy will trade when the regime
+    rotates. Regime-blocked time doesn't count against it.
+
+**On early retire (any trigger):**
 ```
 Stop container: bot_stop(bot_deployment_id)
 campaign.state = "retired"
@@ -373,14 +437,59 @@ min_sharpe = paper_validation[timeframe].min_live_sharpe
 max_dd = graduation_gates.max_drawdown_pct
 ```
 
-**If ALL pass:**
-```
-current_trade_count >= min_trades
-AND current_sharpe >= min_sharpe (0.5)
-AND abs(current_max_dd) <= max_dd
-```
+**CASE 1: Enough trades to judge**
+  `current_trade_count >= min_trades`
 
-**GRADUATE:**
+  If `current_sharpe >= min_sharpe AND abs(current_max_dd) <= max_dd`:
+    → **GRADUATE** (see graduation actions below)
+  Else:
+    → **RETIRE** with specific reason:
+      sharpe < min: `"low_sharpe"`
+      dd > max: `"excessive_drawdown"`
+
+**CASE 2: Some trades but not enough**
+  `current_trade_count > 0 AND < min_trades`
+
+  If `campaign.paper_trading.extended != true`:
+    → **EXTEND** validation by 50% of original period
+    → `campaign.paper_trading.validation_deadline += (validation_days × 0.5)`
+    → `campaign.paper_trading.extended = true`
+    → Post: "{strategy} has {n}/{min} trades at deadline.
+      Extending validation by {days} days for more data."
+    → Skip graduation/retirement this tick.
+
+  If already extended (`campaign.paper_trading.extended == true`):
+    → **RETIRE**. Reason: `"insufficient_trades_after_extension"`
+    → The strategy had 1.5× the validation period and still
+      didn't reach min_trades. It's too infrequent for this timeframe.
+
+**CASE 3: Zero trades at deadline**
+  `current_trade_count == 0`
+
+  Check regime-blocked ratio:
+  ```
+  total_ticks = ticks_signals_on + ticks_signals_off
+  signals_on_pct = ticks_signals_on / total_ticks (if total_ticks > 0)
+  ```
+
+  If `signals_on_pct < 0.25` (signals ON less than 25% of time):
+    → The strategy never had a fair chance. Regime was against it.
+    → If `campaign.paper_trading.regime_extension != true`:
+      → **EXTEND** by the full original validation period
+      → `campaign.paper_trading.validation_deadline += validation_days`
+      → `campaign.paper_trading.regime_extension = true`
+      → Post: "{strategy} was regime-blocked for {pct}% of warm-up.
+        Resetting validation clock."
+    → If already regime-extended:
+      → **RETIRE**. Reason: `"no_signals_after_regime_extension"`
+
+  If `signals_on_pct >= 0.25` (had opportunities but never triggered):
+    → **RETIRE**. Reason: `"no_signals_despite_favorable_regime"`
+    → The strategy's entry conditions don't match this pair's behavior.
+
+---
+
+**GRADUATE actions (Case 1 pass):**
 ```
 campaign.state = "graduated"
 campaign.graduation = {
@@ -413,13 +522,10 @@ Post to feed: "GRADUATED: {strategy} on {pair}/{tf}
 Message user with full details
 ```
 
-**RETIRE:**
+**RETIRE actions (any case):**
 ```
 campaign.state = "retired"
-campaign.paper_trading.retire_reason =
-  trades < min: "insufficient_trades"
-  sharpe < min: "low_sharpe"
-  dd > max: "excessive_drawdown"
+campaign.paper_trading.retire_reason = reason
 Stop container, free slot
 aphexdata_record_event(verb_id="kata_retired", ...)
 Post to feed: "Retired: {strategy} — {reason}"
@@ -694,6 +800,34 @@ Campaigns are the source of truth for paper bot state. Located at
 `/workspace/group/research-planner/campaigns.json`. Auto-mode reads
 and writes `campaign.state` and `campaign.paper_trading` fields.
 
+**campaign.paper_trading fields** (managed by auto-mode + research-planner):
+```json
+{
+  "bot_deployment_id": "dep_xrp_wolfclaw_1h",
+  "deployed_at": "2026-04-02T10:00:00Z",
+  "validation_period_days": 7,
+  "validation_deadline": "2026-04-09T10:00:00Z",
+  "current_pnl_pct": 0.0,
+  "current_trade_count": 0,
+  "current_sharpe": 0.0,
+  "current_max_dd": 0.0,
+  "retire_reason": null,
+  "ticks_signals_on": 0,
+  "ticks_signals_off": 0,
+  "expected_trades_in_validation": 12,
+  "trades_per_day_estimate": 1.7,
+  "feasibility_warning": false,
+  "extended": false,
+  "regime_extension": false
+}
+```
+
+- `ticks_signals_on/off`: incremented by Step 2 each health check. Used by Step 5 Case 3.
+- `expected_trades_in_validation`: estimated at deploy time from WF trade counts.
+- `feasibility_warning`: true if expected_trades < min_trades at deploy time.
+- `extended`: true if validation was extended 50% (Case 2). Only once.
+- `regime_extension`: true if zero-trade bot got full extension due to regime-blocking (Case 3). Only once.
+
 ### market-prior.json
 
 ```json
@@ -824,6 +958,8 @@ When monitoring needs context (during hourly regime refresh):
 | `roster_staged` | execution | roster | Graduated strategies staged |
 | `missed_opportunity` | analysis | cell | High-scoring cell with no staged strategy |
 | `missed_opportunity_daily_summary` | analysis | report | End-of-day missed opportunities |
+| `orphan_detected` | monitoring | deployment | Bot running without matching campaign |
+| `orphan_auto_retired` | execution | deployment | Orphan bot auto-retired after 48h |
 | `slot_filled` | execution | campaign | Triage winner auto-deployed |
 | `correlation_alert` | analysis | portfolio | Avg correlation > 0.30 |
 
