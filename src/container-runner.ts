@@ -44,6 +44,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   model?: string;
+  capabilities?: import('./types.js').CapabilityProfile;
 }
 
 export interface ContainerOutput {
@@ -154,6 +155,8 @@ function buildVolumeMounts(
   );
 
   // Sync skills from container/skills/ into each group's .claude/skills/
+  // Only copies directories whose source is newer than the destination to
+  // avoid redundant I/O on every container spawn.
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
@@ -163,6 +166,12 @@ function buildVolumeMounts(
       if (!fs.statSync(srcDir).isDirectory()) continue;
       srcSkills.add(skillDir);
       const dstDir = path.join(skillsDst, skillDir);
+      // Skip copy if destination exists and source hasn't been modified
+      if (fs.existsSync(dstDir)) {
+        const srcMtime = fs.statSync(srcDir).mtimeMs;
+        const dstMtime = fs.statSync(dstDir).mtimeMs;
+        if (srcMtime <= dstMtime) continue;
+      }
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
     // Remove stale skills that no longer exist on host
@@ -199,7 +208,7 @@ function buildVolumeMounts(
   // Sync agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
-  // Always re-sync so host updates (new MCP servers, bug fixes) propagate.
+  // Only re-syncs when source directory is newer than destination.
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -213,7 +222,11 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    const needsSync = !fs.existsSync(groupAgentRunnerDir) ||
+      fs.statSync(agentRunnerSrc).mtimeMs > fs.statSync(groupAgentRunnerDir).mtimeMs;
+    if (needsSync) {
+      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -333,84 +346,69 @@ function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Forward Freqtrade MCP settings from .env to container
+  // Read all env keys in a single call to avoid re-parsing .env from disk 5 times
+  const allEnvKeys = [
+    'FREQTRADE_API_URL', 'FREQTRADE_USERNAME', 'FREQTRADE_PASSWORD',
+    'FREQTRADE_PATH', 'FREQTRADE_DOCS_PATH', 'FREQTRADE_STRATEGIES_DIR',
+    'APHEXDATA_URL', 'APHEXDATA_API_KEY', 'APHEXDATA_AGENT_ID',
+    'CONSOLE_SUPABASE_URL', 'CONSOLE_SUPABASE_ANON_KEY',
+    'CONSOLE_OPERATOR_ID', 'SUPABASE_USER_ID',
+    'ORDERFLOW_API_URL',
+    'GITHUB_TOKEN',
+  ];
+  const envValues = readEnvFile(allEnvKeys);
+
+  // Helper: resolve from process.env first, then .env file
+  const envVal = (key: string) => process.env[key] || envValues[key];
+
+  // Forward Freqtrade MCP settings
   const ftKeys = [
-    'FREQTRADE_API_URL',
-    'FREQTRADE_USERNAME',
-    'FREQTRADE_PASSWORD',
-    'FREQTRADE_PATH',
-    'FREQTRADE_DOCS_PATH',
-    'FREQTRADE_STRATEGIES_DIR',
+    'FREQTRADE_API_URL', 'FREQTRADE_USERNAME', 'FREQTRADE_PASSWORD',
+    'FREQTRADE_PATH', 'FREQTRADE_DOCS_PATH', 'FREQTRADE_STRATEGIES_DIR',
   ];
-  const ftEnv = readEnvFile(ftKeys);
   for (const key of ftKeys) {
-    const val = process.env[key] || ftEnv[key];
+    const val = envVal(key);
     if (val) args.push('-e', `${key}=${val}`);
   }
 
-  // Forward aphexDATA settings from .env to container
-  const aphexdataKeys = [
-    'APHEXDATA_URL',
-    'APHEXDATA_API_KEY',
-    'APHEXDATA_AGENT_ID',
-  ];
-  const aphexdataEnv = readEnvFile(aphexdataKeys);
+  // Forward aphexDATA settings
+  const aphexdataKeys = ['APHEXDATA_URL', 'APHEXDATA_API_KEY', 'APHEXDATA_AGENT_ID'];
   for (const key of aphexdataKeys) {
-    const val = process.env[key] || aphexdataEnv[key];
+    const val = envVal(key);
     if (val) args.push('-e', `${key}=${val}`);
   }
 
-  // Forward Supabase settings to container for signal marketplace + state sync
-  const supabaseKeys = [
-    'CONSOLE_SUPABASE_URL',
-    'CONSOLE_SUPABASE_ANON_KEY',
-    'CONSOLE_OPERATOR_ID',
-    'SUPABASE_USER_ID',
-  ];
-  const supabaseEnv = readEnvFile(supabaseKeys);
+  // Forward Supabase settings for signal marketplace + state sync
   const supabaseMapping: Record<string, string> = {
     CONSOLE_SUPABASE_URL: 'SUPABASE_URL',
     CONSOLE_SUPABASE_ANON_KEY: 'SUPABASE_ANON_KEY',
     CONSOLE_OPERATOR_ID: 'CONSOLE_OPERATOR_ID',
     SUPABASE_USER_ID: 'SUPABASE_USER_ID',
   };
-  for (const key of supabaseKeys) {
-    const val = process.env[key] || supabaseEnv[key];
-    if (val) args.push('-e', `${supabaseMapping[key]}=${val}`);
+  for (const [hostKey, containerKey] of Object.entries(supabaseMapping)) {
+    const val = envVal(hostKey);
+    if (val) args.push('-e', `${containerKey}=${val}`);
   }
 
-  // Forward Orderflow API URL to container (no auth needed, public API)
-  const ofKeys = ['ORDERFLOW_API_URL'];
-  const ofEnv = readEnvFile(ofKeys);
-  for (const key of ofKeys) {
-    const val = process.env[key] || ofEnv[key];
-    if (val) args.push('-e', `${key}=${val}`);
-  }
+  // Forward Orderflow API URL (no auth needed, public API)
+  const ofUrl = envVal('ORDERFLOW_API_URL');
+  if (ofUrl) args.push('-e', `ORDERFLOW_API_URL=${ofUrl}`);
 
   // Raise the per-response output token ceiling above the SDK default (32K).
   // Long session-resume catch-ups (accumulated auto-mode ticks, research cycles)
   // can easily exceed 32K, causing "response exceeded 32000 output token maximum".
-  // Allow overriding via host env so it can be tuned without a code change.
   const maxOutputTokens = process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS || '64000';
   args.push('-e', `CLAUDE_CODE_MAX_OUTPUT_TOKENS=${maxOutputTokens}`);
 
   // Swarm: always use the container-side path (matches the bind mount).
-  // Do NOT forward host SWARM_REPORT_DIR — it may be a host-side absolute
-  // path or relative path that doesn't exist inside the container.
   args.push('-e', 'SWARM_REPORT_DIR=/workspace/extra/swarm-reports');
 
-  // Forward group folder name so container agents can embed it in swarm
-  // request manifests. The host-side swarm runner uses this to locate
-  // strategy files in data/sessions/<group>/freqtrade-user-data/strategies/.
+  // Forward group folder name for swarm request manifests
   args.push('-e', `GROUP_FOLDER=${groupFolder}`);
 
   // Forward GitHub token for sdna publish
-  const ghKeys = ['GITHUB_TOKEN'];
-  const ghEnv = readEnvFile(ghKeys);
-  for (const key of ghKeys) {
-    const val = process.env[key] || ghEnv[key];
-    if (val) args.push('-e', `${key}=${val}`);
-  }
+  const ghToken = envVal('GITHUB_TOKEN');
+  if (ghToken) args.push('-e', `GITHUB_TOKEN=${ghToken}`);
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(

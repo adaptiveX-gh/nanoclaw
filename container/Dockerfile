@@ -77,8 +77,9 @@ RUN npm install
 # Copy source code
 COPY agent-runner/ ./
 
-# Build TypeScript
-RUN npm run build
+# Build TypeScript and save source hash for cold-start skip
+RUN npm run build && \
+    find src -name '*.ts' -exec md5sum {} + | sort | md5sum | cut -d' ' -f1 > /app/dist/.source-hash
 
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
@@ -87,7 +88,11 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 # Container input (prompt, group info) is passed via stdin JSON.
 # Credentials are injected by the host's credential proxy — never passed here.
 # Follow-up messages arrive via IPC files in /workspace/ipc/input/
-RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\nln -s /app/node_modules /tmp/dist/node_modules\nchmod -R a-w /tmp/dist\ncat > /tmp/input.json\nnode /tmp/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+#
+# Hash-based recompilation: skips tsc (~3-8s) when source is unchanged from
+# the image build. Per-group customizations to /app/src trigger recompilation
+# automatically because their hash will differ.
+RUN printf '#!/bin/bash\nset -e\ncd /app\nCURRENT_HASH=$(find src -name "*.ts" -exec md5sum {} + | sort | md5sum | cut -d" " -f1)\nCACHED_HASH=$(cat /app/dist/.source-hash 2>/dev/null || echo "")\nif [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then\n  echo "[entrypoint] Source changed, recompiling TypeScript..." >&2\n  npx tsc --outDir /tmp/dist 2>&1 >&2\n  echo "$CURRENT_HASH" > /tmp/dist/.source-hash\n  ln -s /app/node_modules /tmp/dist/node_modules\n  chmod -R a-w /tmp/dist\nelse\n  cp -r /app/dist /tmp/dist\n  ln -sf /app/node_modules /tmp/dist/node_modules\nfi\ncat > /tmp/input.json\nnode /tmp/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node

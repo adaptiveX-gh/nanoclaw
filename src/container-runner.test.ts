@@ -223,10 +223,11 @@ describe('container-runner sync behavior', () => {
     vi.restoreAllMocks();
   });
 
-  it('always syncs agent-runner-src even when directory exists', async () => {
+  it('syncs agent-runner-src when source is newer than destination', async () => {
     const mockFs = await import('fs');
     const existsSyncMock = vi.mocked(mockFs.default.existsSync);
     const cpSyncMock = vi.mocked(mockFs.default.cpSync);
+    const statSyncMock = vi.mocked(mockFs.default.statSync);
 
     // Make agent-runner source dir exist, AND the group's copy already exist
     existsSyncMock.mockImplementation((p: fs.PathLike) => {
@@ -236,6 +237,18 @@ describe('container-runner sync behavior', () => {
       return false;
     });
 
+    // Source is newer than destination → triggers sync
+    statSyncMock.mockImplementation((p: fs.PathLike) => {
+      const ps = String(p);
+      if (ps.includes('agent-runner') && ps.includes('src') && !ps.includes('agent-runner-src')) {
+        return { mtimeMs: 2000, isDirectory: () => true } as ReturnType<typeof mockFs.default.statSync>;
+      }
+      if (ps.includes('agent-runner-src')) {
+        return { mtimeMs: 1000, isDirectory: () => true } as ReturnType<typeof mockFs.default.statSync>;
+      }
+      return { mtimeMs: 0, isDirectory: () => true } as ReturnType<typeof mockFs.default.statSync>;
+    });
+
     const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     // Let container start, then exit
@@ -243,7 +256,7 @@ describe('container-runner sync behavior', () => {
     await vi.advanceTimersByTimeAsync(10);
     await resultPromise;
 
-    // cpSync should be called for agent-runner-src (always sync, not just first-time)
+    // cpSync should be called for agent-runner-src when source is newer
     const cpSyncCalls = cpSyncMock.mock.calls.map((c) => String(c[0]));
     const agentRunnerCopy = cpSyncCalls.some((src) =>
       src.includes('agent-runner'),
@@ -318,9 +331,11 @@ describe('container-runner sync behavior', () => {
     await vi.advanceTimersByTimeAsync(10);
     await resultPromise;
 
-    // spawn args should NOT contain swarm-reports mount
+    // spawn args should NOT contain a swarm-reports bind mount (-v ...swarm-reports:...)
+    // Note: the SWARM_REPORT_DIR env var is always set regardless of mounts
     const args = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
-    const argsStr = args?.join(' ') || '';
-    expect(argsStr).not.toContain('swarm-reports');
+    const mountArgs = args?.filter((_a, i, arr) => arr[i - 1] === '-v') || [];
+    const hasSwarmMount = mountArgs.some((m) => m.includes('swarm-reports'));
+    expect(hasSwarmMount).toBe(false);
   });
 });

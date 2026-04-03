@@ -30,10 +30,20 @@ function isValidEntry(entry: unknown): entry is ChatAllowlistEntry {
   return validAllow && validMode;
 }
 
+// TTL cache: avoid re-reading the allowlist file on every message (called per-message in hot loop)
+const ALLOWLIST_CACHE_TTL_MS = 10_000;
+let cachedAllowlist: SenderAllowlistConfig | null = null;
+let cachedAllowlistAt = 0;
+
 export function loadSenderAllowlist(
   pathOverride?: string,
 ): SenderAllowlistConfig {
   const filePath = pathOverride ?? SENDER_ALLOWLIST_PATH;
+
+  // Return cached result if within TTL and using default path
+  if (!pathOverride && cachedAllowlist && Date.now() - cachedAllowlistAt < ALLOWLIST_CACHE_TTL_MS) {
+    return cachedAllowlist;
+  }
 
   let raw: string;
   try {
@@ -81,11 +91,19 @@ export function loadSenderAllowlist(
     }
   }
 
-  return {
+  const result: SenderAllowlistConfig = {
     default: obj.default as ChatAllowlistEntry,
     chats,
     logDenied: obj.logDenied !== false,
   };
+
+  // Cache result for default path
+  if (!pathOverride) {
+    cachedAllowlist = result;
+    cachedAllowlistAt = Date.now();
+  }
+
+  return result;
 }
 
 function getEntry(

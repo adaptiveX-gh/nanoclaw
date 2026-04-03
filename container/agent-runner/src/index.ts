@@ -19,6 +19,8 @@ import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+type CapabilityProfile = 'core' | 'research' | 'trading' | 'full';
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -28,6 +30,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   model?: string;
+  capabilities?: CapabilityProfile;
 }
 
 interface ContainerOutput {
@@ -333,14 +336,33 @@ function waitForIpcMessage(): Promise<string | null> {
 }
 
 /**
- * Build MCP servers config, only including servers whose dependencies are present.
- * nanoclaw + freqtrade are always loaded; aphexdata and swarm are conditional.
+ * Capability profiles → which MCP server names are enabled.
+ * Each level includes the previous level's servers.
+ */
+const CAPABILITY_SERVERS: Record<CapabilityProfile, Set<string>> = {
+  core:     new Set(['nanoclaw', 'orderflow']),
+  research: new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'swarm']),
+  trading:  new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'swarm', 'aphexdata', 'botrunner']),
+  full:     new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'swarm', 'aphexdata', 'botrunner', 'clawteam', 'x', 'luxalgo']),
+};
+
+/**
+ * Build MCP servers config filtered by capability profile.
+ * Servers are only included if (a) the profile allows them AND (b) their
+ * runtime dependencies are present (env vars, directories, main-group check).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput): Record<string, any> {
+  const profile = containerInput.capabilities || (containerInput.isMain ? 'full' : 'research');
+  const enabled = CAPABILITY_SERVERS[profile];
+  log(`MCP capability profile: ${profile} (${enabled.size} server types)`);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const servers: Record<string, any> = {
-    nanoclaw: {
+  const servers: Record<string, any> = {};
+
+  // nanoclaw: messaging, scheduling, signals (always in every profile)
+  if (enabled.has('nanoclaw')) {
+    servers.nanoclaw = {
       command: 'node',
       args: [mcpServerPath],
       env: {
@@ -348,8 +370,24 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
         NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
       },
-    },
-    freqtrade: {
+    };
+  }
+
+  // orderflow: real-time regime + microstructure (no auth required)
+  if (enabled.has('orderflow')) {
+    const orderflowUrl = process.env.ORDERFLOW_API_URL || 'https://orderflow.tradev.app';
+    servers.orderflow = {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'orderflow-mcp-stdio.js')],
+      env: {
+        ORDERFLOW_API_URL: orderflowUrl,
+      },
+    };
+  }
+
+  // freqtrade: backtesting, hyperopt, strategy management (~50 tools)
+  if (enabled.has('freqtrade')) {
+    servers.freqtrade = {
       command: 'python3',
       args: ['/app/freqtrade-mcp/__main__.py'],
       env: {
@@ -360,20 +398,36 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         FREQTRADE_DOCS_PATH: process.env.FREQTRADE_DOCS_PATH || '',
         FREQTRADE_STRATEGIES_DIR: process.env.FREQTRADE_STRATEGIES_DIR || '',
       },
-    },
-  };
+    };
+  }
 
   // aphexDNA: genome lifecycle MCP (create, fork, compile, attest, register)
-  servers.aphexdna = {
-    command: 'python3',
-    args: ['-m', 'aphexdna'],
-    env: {
-      REGISTRY_PATH: '.sdna-registry',
-    },
-  };
+  if (enabled.has('aphexdna')) {
+    servers.aphexdna = {
+      command: 'python3',
+      args: ['-m', 'aphexdna'],
+      env: {
+        REGISTRY_PATH: '.sdna-registry',
+      },
+    };
+  }
 
-  // aphexDATA: only load if URL is configured
-  if (process.env.APHEXDATA_URL) {
+  // swarm: FreqSwarm reports, triggers, seeds — only if report directory exists
+  if (enabled.has('swarm')) {
+    const swarmDir = process.env.SWARM_REPORT_DIR || '/workspace/extra/swarm-reports';
+    if (fs.existsSync(swarmDir)) {
+      servers.swarm = {
+        command: 'node',
+        args: [path.join(path.dirname(mcpServerPath), 'swarm-mcp-stdio.js')],
+        env: {
+          SWARM_REPORT_DIR: swarmDir,
+        },
+      };
+    }
+  }
+
+  // aphexDATA: event ledger — only if URL is configured
+  if (enabled.has('aphexdata') && process.env.APHEXDATA_URL) {
     servers.aphexdata = {
       command: 'node',
       args: [path.join(path.dirname(mcpServerPath), 'aphexdata-mcp-stdio.js')],
@@ -383,24 +437,24 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         APHEXDATA_AGENT_ID: process.env.APHEXDATA_AGENT_ID || '',
       },
     };
-    log('MCP: aphexdata enabled (APHEXDATA_URL set)');
   }
 
-  // Swarm: only load if report directory exists
-  const swarmDir = process.env.SWARM_REPORT_DIR || '/workspace/extra/swarm-reports';
-  if (fs.existsSync(swarmDir)) {
-    servers.swarm = {
-      command: 'node',
-      args: [path.join(path.dirname(mcpServerPath), 'swarm-mcp-stdio.js')],
-      env: {
-        SWARM_REPORT_DIR: swarmDir,
-      },
-    };
-    log('MCP: swarm enabled (report dir exists)');
+  // botrunner: bot lifecycle — main group only + bot-runner dir exists
+  if (enabled.has('botrunner')) {
+    const botRunnerDir = '/workspace/extra/bot-runner';
+    if (containerInput.isMain && fs.existsSync(botRunnerDir)) {
+      servers.botrunner = {
+        command: 'node',
+        args: [path.join(path.dirname(mcpServerPath), 'bot-mcp-stdio.js')],
+        env: {
+          BOT_RUNNER_DIR: botRunnerDir,
+        },
+      };
+    }
   }
 
-  // ClawTeam: only for main group (leader can spawn workers)
-  if (containerInput.isMain) {
+  // clawteam: worker management — main group only
+  if (enabled.has('clawteam') && containerInput.isMain) {
     servers.clawteam = {
       command: 'node',
       args: [path.join(path.dirname(mcpServerPath), 'clawteam-mcp-stdio.js')],
@@ -409,35 +463,10 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         NANOCLAW_IS_MAIN: '1',
       },
     };
-    log('MCP: clawteam enabled (main group)');
   }
 
-  // Bot runner: only load for main group when bot-runner dir exists
-  const botRunnerDir = '/workspace/extra/bot-runner';
-  if (containerInput.isMain && fs.existsSync(botRunnerDir)) {
-    servers.botrunner = {
-      command: 'node',
-      args: [path.join(path.dirname(mcpServerPath), 'bot-mcp-stdio.js')],
-      env: {
-        BOT_RUNNER_DIR: botRunnerDir,
-      },
-    };
-    log('MCP: botrunner enabled (main group + bot runner dir exists)');
-  }
-
-  // Orderflow: real-time regime + microstructure (no auth required)
-  const orderflowUrl = process.env.ORDERFLOW_API_URL || 'https://orderflow.tradev.app';
-  servers.orderflow = {
-    command: 'node',
-    args: [path.join(path.dirname(mcpServerPath), 'orderflow-mcp-stdio.js')],
-    env: {
-      ORDERFLOW_API_URL: orderflowUrl,
-    },
-  };
-  log(`MCP: orderflow enabled (url=${orderflowUrl})`);
-
-  // X (Twitter): browser automation for posting/liking/replying (main group only)
-  if (containerInput.isMain) {
+  // x (Twitter): browser automation — main group only
+  if (enabled.has('x') && containerInput.isMain) {
     servers.x = {
       command: 'node',
       args: [path.join(path.dirname(mcpServerPath), 'x-mcp-stdio.js')],
@@ -446,11 +475,10 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         NANOCLAW_IS_MAIN: '1',
       },
     };
-    log('MCP: x enabled (main group)');
   }
 
-  // LuxAlgo Quant: browser automation for script discovery (main group only)
-  if (containerInput.isMain) {
+  // luxalgo: script discovery — main group only
+  if (enabled.has('luxalgo') && containerInput.isMain) {
     servers.luxalgo = {
       command: 'node',
       args: [path.join(path.dirname(mcpServerPath), 'luxalgo-mcp-stdio.js')],
@@ -459,7 +487,6 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         NANOCLAW_IS_MAIN: '1',
       },
     };
-    log('MCP: luxalgo enabled (main group)');
   }
 
   log(`MCP servers: ${Object.keys(servers).join(', ')}`);
@@ -532,10 +559,10 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  // Write .mcp.json so subagents (Task tool) inherit MCP server access
-  const mcpConfig = buildMcpServers(mcpServerPath, containerInput);
+  // Build MCP servers config once and reuse for both subagent inheritance and SDK query
+  const mcpServers = buildMcpServers(mcpServerPath, containerInput);
   const mcpJsonPath = path.join('/workspace/group', '.mcp.json');
-  fs.writeFileSync(mcpJsonPath, JSON.stringify({ mcpServers: mcpConfig }, null, 2));
+  fs.writeFileSync(mcpJsonPath, JSON.stringify({ mcpServers }, null, 2));
   log(`Wrote MCP config to ${mcpJsonPath} for subagent inheritance`);
 
   let heartbeat: ReturnType<typeof setInterval> | null = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
@@ -561,21 +588,14 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__freqtrade__*',
-        'mcp__aphexdna__*',
-        'mcp__aphexdata__*',
-        'mcp__swarm__*',
-        'mcp__clawteam__*',
-        'mcp__orderflow__*',
-        'mcp__x__*',
-        'mcp__luxalgo__*',
+        // Only allow tools for MCP servers that are actually loaded
+        ...Object.keys(mcpServers).map(name => `mcp__${name}__*`),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: buildMcpServers(mcpServerPath, containerInput),
+      mcpServers,
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
       },

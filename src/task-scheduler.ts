@@ -197,6 +197,7 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         model: resolveModel(task.prompt),
+        capabilities: group.containerConfig?.capabilities,
       },
       (proc, containerName) =>
         deps.onProcess(

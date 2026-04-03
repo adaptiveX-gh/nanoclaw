@@ -296,14 +296,16 @@ async function runAgent(
     })),
   );
 
-  // Update available groups snapshot (main group only can see all groups)
-  const availableGroups = getAvailableGroups();
-  writeGroupsSnapshot(
-    group.folder,
-    isMain,
-    availableGroups,
-    new Set(Object.keys(registeredGroups)),
-  );
+  // Update available groups snapshot (main group only — non-main can't activate groups)
+  if (isMain) {
+    const availableGroups = getAvailableGroups();
+    writeGroupsSnapshot(
+      group.folder,
+      isMain,
+      availableGroups,
+      new Set(Object.keys(registeredGroups)),
+    );
+  }
 
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
@@ -326,6 +328,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        capabilities: group.containerConfig?.capabilities,
       },
       (proc, containerName) =>
         queue.registerProcess(

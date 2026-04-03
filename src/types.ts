@@ -27,9 +27,24 @@ export interface AllowedRoot {
   description?: string;
 }
 
+/**
+ * Capability profiles control which MCP servers are loaded into a container.
+ * Fewer tools = less prompt bloat = faster time-to-first-token.
+ *
+ * - core:     nanoclaw + orderflow (~23 tools) — conversational groups
+ * - research: core + freqtrade + swarm + aphexdna (~102 tools) — research groups
+ * - trading:  research + aphexdata + botrunner (~122 tools) — trading-enabled groups
+ * - full:     all servers (~125+ tools) — main group only
+ */
+export type CapabilityProfile = 'core' | 'research' | 'trading' | 'full';
+
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  /**
+   * Which MCP servers to load. Defaults to 'full' for main groups, 'research' for others.
+   */
+  capabilities?: CapabilityProfile;
   /**
    * When set, mounts the leader group's freqtrade-user-data directory into
    * the worker container at /workspace/extra/leader-user-data (read-only).
