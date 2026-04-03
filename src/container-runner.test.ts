@@ -240,13 +240,23 @@ describe('container-runner sync behavior', () => {
     // Source is newer than destination → triggers sync
     statSyncMock.mockImplementation((p: fs.PathLike) => {
       const ps = String(p);
-      if (ps.includes('agent-runner') && ps.includes('src') && !ps.includes('agent-runner-src')) {
-        return { mtimeMs: 2000, isDirectory: () => true } as ReturnType<typeof mockFs.default.statSync>;
+      if (
+        ps.includes('agent-runner') &&
+        ps.includes('src') &&
+        !ps.includes('agent-runner-src')
+      ) {
+        return { mtimeMs: 2000, isDirectory: () => true } as ReturnType<
+          typeof mockFs.default.statSync
+        >;
       }
       if (ps.includes('agent-runner-src')) {
-        return { mtimeMs: 1000, isDirectory: () => true } as ReturnType<typeof mockFs.default.statSync>;
+        return { mtimeMs: 1000, isDirectory: () => true } as ReturnType<
+          typeof mockFs.default.statSync
+        >;
       }
-      return { mtimeMs: 0, isDirectory: () => true } as ReturnType<typeof mockFs.default.statSync>;
+      return { mtimeMs: 0, isDirectory: () => true } as ReturnType<
+        typeof mockFs.default.statSync
+      >;
     });
 
     const resultPromise = runContainerAgent(testGroup, testInput, () => {});

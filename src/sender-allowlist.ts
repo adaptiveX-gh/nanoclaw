@@ -41,7 +41,11 @@ export function loadSenderAllowlist(
   const filePath = pathOverride ?? SENDER_ALLOWLIST_PATH;
 
   // Return cached result if within TTL and using default path
-  if (!pathOverride && cachedAllowlist && Date.now() - cachedAllowlistAt < ALLOWLIST_CACHE_TTL_MS) {
+  if (
+    !pathOverride &&
+    cachedAllowlist &&
+    Date.now() - cachedAllowlistAt < ALLOWLIST_CACHE_TTL_MS
+  ) {
     return cachedAllowlist;
   }
 

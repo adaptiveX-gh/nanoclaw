@@ -222,8 +222,10 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const needsSync = !fs.existsSync(groupAgentRunnerDir) ||
-      fs.statSync(agentRunnerSrc).mtimeMs > fs.statSync(groupAgentRunnerDir).mtimeMs;
+    const needsSync =
+      !fs.existsSync(groupAgentRunnerDir) ||
+      fs.statSync(agentRunnerSrc).mtimeMs >
+        fs.statSync(groupAgentRunnerDir).mtimeMs;
     if (needsSync) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -348,11 +350,19 @@ function buildContainerArgs(
 
   // Read all env keys in a single call to avoid re-parsing .env from disk 5 times
   const allEnvKeys = [
-    'FREQTRADE_API_URL', 'FREQTRADE_USERNAME', 'FREQTRADE_PASSWORD',
-    'FREQTRADE_PATH', 'FREQTRADE_DOCS_PATH', 'FREQTRADE_STRATEGIES_DIR',
-    'APHEXDATA_URL', 'APHEXDATA_API_KEY', 'APHEXDATA_AGENT_ID',
-    'CONSOLE_SUPABASE_URL', 'CONSOLE_SUPABASE_ANON_KEY',
-    'CONSOLE_OPERATOR_ID', 'SUPABASE_USER_ID',
+    'FREQTRADE_API_URL',
+    'FREQTRADE_USERNAME',
+    'FREQTRADE_PASSWORD',
+    'FREQTRADE_PATH',
+    'FREQTRADE_DOCS_PATH',
+    'FREQTRADE_STRATEGIES_DIR',
+    'APHEXDATA_URL',
+    'APHEXDATA_API_KEY',
+    'APHEXDATA_AGENT_ID',
+    'CONSOLE_SUPABASE_URL',
+    'CONSOLE_SUPABASE_ANON_KEY',
+    'CONSOLE_OPERATOR_ID',
+    'SUPABASE_USER_ID',
     'ORDERFLOW_API_URL',
     'GITHUB_TOKEN',
   ];
@@ -363,8 +373,12 @@ function buildContainerArgs(
 
   // Forward Freqtrade MCP settings
   const ftKeys = [
-    'FREQTRADE_API_URL', 'FREQTRADE_USERNAME', 'FREQTRADE_PASSWORD',
-    'FREQTRADE_PATH', 'FREQTRADE_DOCS_PATH', 'FREQTRADE_STRATEGIES_DIR',
+    'FREQTRADE_API_URL',
+    'FREQTRADE_USERNAME',
+    'FREQTRADE_PASSWORD',
+    'FREQTRADE_PATH',
+    'FREQTRADE_DOCS_PATH',
+    'FREQTRADE_STRATEGIES_DIR',
   ];
   for (const key of ftKeys) {
     const val = envVal(key);
@@ -372,7 +386,11 @@ function buildContainerArgs(
   }
 
   // Forward aphexDATA settings
-  const aphexdataKeys = ['APHEXDATA_URL', 'APHEXDATA_API_KEY', 'APHEXDATA_AGENT_ID'];
+  const aphexdataKeys = [
+    'APHEXDATA_URL',
+    'APHEXDATA_API_KEY',
+    'APHEXDATA_AGENT_ID',
+  ];
   for (const key of aphexdataKeys) {
     const val = envVal(key);
     if (val) args.push('-e', `${key}=${val}`);
