@@ -243,6 +243,50 @@ function loadPortMap(): void {
   }
 }
 
+/**
+ * Reconcile portMap against live Docker containers.
+ * Frees ports claimed by containers that no longer exist (ghost entries).
+ * Called at startup after recoverExistingBots() and periodically during
+ * health checks to prevent port exhaustion from stale entries.
+ */
+function reconcilePorts(): void {
+  let liveIds: Set<string>;
+  try {
+    const output = dockerExec([
+      'ps',
+      '--filter',
+      `name=${CONTAINER_PREFIX}`,
+      '--format',
+      '"{{.Names}}"',
+    ]);
+    liveIds = new Set(
+      (output || '')
+        .split('\n')
+        .map((s) => s.replace(/"/g, '').trim())
+        .filter((s) => s.startsWith(CONTAINER_PREFIX))
+        .map((s) => s.replace(CONTAINER_PREFIX, '')),
+    );
+  } catch {
+    return; // Can't reach Docker — skip reconciliation
+  }
+
+  let freed = 0;
+  for (const [port, deploymentId] of portMap) {
+    if (!liveIds.has(deploymentId)) {
+      portMap.delete(port);
+      activeBots.delete(deploymentId);
+      freed++;
+    }
+  }
+  if (freed > 0) {
+    savePortMap();
+    logger.info(
+      { freed, remaining: portMap.size },
+      'Port reconciliation: freed ghost entries',
+    );
+  }
+}
+
 function writeBotStatus(
   bot: BotInstance,
   extra?: Partial<BotStatusFile>,
@@ -547,7 +591,36 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
     'Starting FreqTrade bot container',
   );
 
-  dockerExec(dockerArgs);
+  // Retry with backoff for transient Docker failures (network, daemon restarts)
+  const MAX_START_RETRIES = 3;
+  const RETRY_DELAYS = [2_000, 5_000, 10_000];
+  let lastStartError: Error | undefined;
+
+  for (let attempt = 0; attempt < MAX_START_RETRIES; attempt++) {
+    try {
+      if (attempt > 0) {
+        removeContainer(containerName); // Clean up partial start
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt - 1]));
+        logger.info(
+          { deploymentId, attempt: attempt + 1 },
+          'Retrying bot container start',
+        );
+      }
+      dockerExec(dockerArgs);
+      lastStartError = undefined;
+      break;
+    } catch (err) {
+      lastStartError = err as Error;
+      logger.warn(
+        { deploymentId, attempt: attempt + 1, error: (err as Error).message },
+        'Docker run failed',
+      );
+    }
+  }
+
+  if (lastStartError) {
+    throw lastStartError;
+  }
 
   // Wait for FreqTrade API to accept connections before returning
   await waitForBotReady(port, password);
@@ -1086,7 +1159,15 @@ function recoverExistingBots(): void {
 
 // ─── Health Check ───────────────────────────────────────────────────
 
+let healthCheckCount = 0;
+
 async function healthCheckBots(): Promise<void> {
+  // Reconcile ports every 5th check (~5 minutes) to free ghost entries
+  healthCheckCount++;
+  if (healthCheckCount % 5 === 0) {
+    reconcilePorts();
+  }
+
   for (const [deploymentId, bot] of activeBots) {
     try {
       // Check Docker container is still running
@@ -1297,6 +1378,7 @@ export function startBotRunner(runnerDeps?: BotRunnerDeps): void {
   // Recover state
   loadPortMap();
   recoverExistingBots();
+  reconcilePorts(); // Free ports for containers that died while we were down
 
   // Start polling
   pollRequests();

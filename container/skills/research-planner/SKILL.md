@@ -211,6 +211,7 @@ Count graduates per group. Least-covered group gets highest priority.
             + (group_has_zero_graduates × 5)
             + (archetype_has_zero_graduates × 3)
             + (timeframe_frequency_bonus × 2)
+            + (regime_stability_bonus × 1.0)
 
   timeframe_frequency_bonus:
     5m:  1.0   (highest frequency, fastest validation feedback)
@@ -219,9 +220,33 @@ Count graduates per group. Least-covered group gets highest priority.
     4h:  0.3   (low frequency, slow validation)
     1d:  0.0   (very low frequency, no urgency bonus)
 
+  regime_stability_bonus:
+    Read regime-transitions.json for the cell's pair/timeframe.
+    Current regime = from market-prior.json
+
+    stability = P(current_regime → current_regime)
+
+    If the archetype's preferred regime matches current regime:
+      regime_stability_bonus = stability × 1.5
+      (e.g., MR prefers TRANQUIL, current is TRANQUIL,
+       stability 0.55 → bonus = 0.825)
+
+    If the archetype's preferred regime does NOT match current:
+      regime_stability_bonus = 0
+      (deploying into wrong regime — no bonus regardless of stability)
+
+    If regime-transitions.json doesn't exist yet (first week):
+      regime_stability_bonus = 0 (skip until data available)
+
   This means: when two gaps have similar composite + group diversity,
-  the system prefers shorter timeframes because they produce signals
-  sooner and give faster validation feedback during warm-up.
+  the system prefers shorter timeframes (faster feedback) AND gaps
+  where the current favorable regime is likely to PERSIST. Deploying
+  into a stable TRANQUIL is better than deploying into a TRANQUIL
+  that historically flips to EFFICIENT_TREND 45% of the time.
+
+  Post to feed with gap selection:
+    "Gap: MR on SOL/1h. Current: TRANQUIL (stability: 55%,
+     40 samples). Regime likely to persist for next 2-3 ticks."
 
   A 1h strategy with 15 trades/month graduates in 7 days and gives
   meaningful live Sharpe. A 1d strategy with 3 trades/month needs
@@ -295,17 +320,142 @@ STEP 3: MEASURE BASELINE
      Parse all 4 results from the output. This is one tool call
      that produces 4 window results.
 
-  4. Compute:
+  4. Extract trade counts per window alongside Sharpe:
+
+     wf_per_window: [0.39, 1.08, -0.47, -0.36]
+     wf_trades_per_window: [9, 14, 17, 10]
+
+     Both arrays are required. If trade count can't be extracted
+     from the backtest output, run a separate parse on the export
+     file: grep "Total trades" from each _w{N} export.
+
+  5. Compute:
+
      favorable_sharpe = average of POSITIVE windows only
      (portfolio only sees these — auto-mode turns strategy off
      in negative windows via regime gating)
-  5. Log WF pattern (CONSISTENT/DEGRADING/ALTERNATING/SINGLE_SPIKE)
+
+     unfavorable_sharpe = average of NEGATIVE windows only
+     (If all windows positive: unfavorable_sharpe = 0, no risk flag)
+
+     total_oos_trades = sum of wf_trades_per_window for POSITIVE
+     windows only (only count trades in windows that contribute
+     to favorable_sharpe)
+
+  6. Log WF pattern (CONSISTENT/DEGRADING/ALTERNATING/SINGLE_SPIKE)
      for diagnostics, NOT as a gate.
 
-Decision:
-  favorable_sharpe >= 0.5 -> skip Step 4, go to Step 5 (deploy)
-  favorable_sharpe 0.0-0.5 -> Step 4 (improve)
-  favorable_sharpe < 0.0 -> drop, back to Step 2
+### OOS trade significance check
+
+  If total_oos_trades >= 30:
+    → favorable_sharpe is RELIABLE. Proceed normally.
+
+  If total_oos_trades 10-29:
+    → favorable_sharpe is WEAK. Deploy with caution.
+    → Flag: campaign.triage.low_trade_count = true
+    → Extend validation period by 50%:
+      validation_days = archetypes.paper_validation[tf].days × 1.5
+    → Post to feed: "Weak OOS sample: favorable Sharpe {fav} based
+      on {trades} trades (need 30+ for confidence). Extending
+      warm-up to {days} days."
+
+  If total_oos_trades < 10:
+    → favorable_sharpe is NOISE. Do NOT deploy.
+    → A Sharpe from < 10 trades is not a Sharpe. It's luck.
+    → If this was the only candidate: back to Step 2 (find another)
+    → If improvement might add trades: go to Step 4, but the
+      obstacle is "too few trades" not "low Sharpe"
+    → Post to feed: "Rejected: {strategy} — favorable Sharpe {fav}
+      from only {trades} OOS trades. Statistically meaningless."
+
+  Store in campaign:
+    campaign.triage.total_oos_trades = total_oos_trades
+    campaign.triage.oos_significance = "reliable" | "weak" | "noise"
+
+  Example that would have been caught:
+    lux-mr-eth-1d: favorable_sharpe 2.10 from 1 window, 2 trades
+    → total_oos_trades = 2 → NOISE → rejected
+    → Correct outcome: this strategy needs a shorter timeframe
+      or a much longer backtest range to generate enough trades
+
+### Unfavorable Sharpe floor
+
+  Store in campaign:
+    campaign.triage.wf_unfavorable_sharpe = unfavorable_sharpe
+
+  FLOOR CHECK:
+
+  If unfavorable_sharpe >= -0.5 (mild downside):
+    → No restriction. Regime gating handles this normally.
+
+  If unfavorable_sharpe between -0.5 and -1.0 (significant downside):
+    → WARNING: deploy with tighter risk management
+    → Flag: campaign.triage.high_regime_dependency = true
+    → Post to feed: "High regime dependency: {strategy} has
+      unfavorable Sharpe {n}. Losses will be significant if
+      regime gating fails. Tightening DD trigger."
+    → Auto-mode uses TIGHTER early retirement for this bot:
+      DD trigger at 1.0× archetype max (not 1.5×)
+
+  If unfavorable_sharpe < -1.0 (catastrophic downside):
+    → REJECT. Do not deploy.
+    → Even with perfect regime gating, one miscalibration
+      exposes the portfolio to catastrophic loss.
+    → If favorable_sharpe is high (e.g., [+2.0, -3.0, +1.5, -4.0]):
+      the strategy is a regime binary — great when right,
+      devastating when wrong. Too risky for paper trading.
+    → Go to Step 4: obstacle is "catastrophic downside in
+      unfavorable regime." Target: reduce unfavorable_sharpe
+      above -1.0 (add regime filter, tighten stoploss, etc.)
+    → Post to feed: "Rejected: {strategy} — unfavorable Sharpe
+      {n} below -1.0 floor. Catastrophic downside risk."
+
+  Example:
+    Windows: [+2.0, -3.0, +1.5, -4.0]
+    favorable_sharpe = 1.75 (looks great)
+    unfavorable_sharpe = -3.5 (catastrophic)
+    → REJECTED. The favorable Sharpe is hiding a -3.5 downside.
+    → Step 4 obstacle: "reduce downside risk in unfavorable regimes"
+
+### Decision (after baseline measurement)
+
+  Compute: favorable_sharpe, unfavorable_sharpe, total_oos_trades
+
+  REJECT if ANY:
+    unfavorable_sharpe < -1.0 → "catastrophic downside"
+    total_oos_trades < 10 → "insufficient OOS trades"
+    favorable_sharpe < 0.0 → "no edge in any condition"
+    → Back to Step 2 (find another candidate)
+
+  DEPLOY if ALL:
+    favorable_sharpe >= 0.5
+    total_oos_trades >= 30
+    unfavorable_sharpe >= -1.0
+    → Step 5 (deploy paper bot, standard validation)
+
+  DEPLOY WITH CAUTION if:
+    favorable_sharpe >= 0.5
+    total_oos_trades 10-29
+    unfavorable_sharpe >= -1.0
+    → Step 5 (deploy with extended validation: +50% days)
+
+  DEPLOY WITH CAUTION + TIGHT DD if:
+    favorable_sharpe >= 0.5
+    total_oos_trades >= 10
+    unfavorable_sharpe between -1.0 and -0.5
+    → Step 5 (deploy with extended validation + 1.0× DD trigger)
+
+  IMPROVE if:
+    favorable_sharpe 0.0-0.5
+    total_oos_trades >= 10
+    unfavorable_sharpe >= -1.0
+    → Step 4 (Kata improvement loop)
+
+  For strategies that REJECT on trade count or unfavorable floor:
+    Log the rejection in kata-state.json with detailed reason.
+    This feeds into kata-history — future Katas know "1d
+    timeframes for this archetype don't produce enough trades"
+    or "this indicator combination has catastrophic downside."
 
 
 ===============================================================================
@@ -326,7 +476,48 @@ Read baseline metrics + .py code together. Ask:
   | Alternating +/- windows | Regime dependent, needs filter |
   | Decaying Sharpe | Overfit to older data |
 
-Write: "Obstacle: {what} because {why}. Target: {metric} from {current} to {goal}."
+Write ONE obstacle statement with a CATEGORY TAG:
+
+  "Obstacle [{category}]: {description}.
+   Target: {metric} from {current} to {goal}."
+
+  Standard categories:
+
+  | Category | Description | Common Archetype |
+  |----------|-------------|-----------------|
+  | entry_timing | Entry fires at wrong moment (falling knives, lag) | MR, Range |
+  | exit_timing | Exits too early (cuts winners) or too late (holds losers) | All |
+  | regime_mismatch | Strategy only works in specific conditions | All |
+  | param_overfit | Parameters fit historical noise, not signal | All |
+  | signal_noise | Indicator produces too many false positives | Scalping, Vol |
+  | insufficient_trades | Not enough signals for validation | Carry, 1d TFs |
+  | stoploss_sizing | Stoploss too wide (big DD) or too tight (stopped out) | All |
+  | liquidity | Strategy works on BTC but not on thin pairs | Breakout, Scalping |
+
+  Example:
+  "Obstacle [entry_timing]: win rate 35% because RSI < 30 entries
+   fire during strong downtrends. Target: win_rate from 0.35 to 0.45."
+
+  Store in kata-state.json obstacles[]:
+  {
+    "id": 1,
+    "category": "entry_timing",
+    "name": "win_rate_low",
+    "description": "RSI entries fire during downtrends",
+    "target_metric": "win_rate",
+    "target_from": 0.35,
+    "target_to": 0.45,
+    "status": "resolved",
+    "experiments_tried": 3,
+    "best_result": 0.42
+  }
+
+  After each experiment (4c), also record which TOOL was used:
+  {
+    "obstacle_category": "entry_timing",
+    "tool": "code_edit",
+    "kept": true
+  }
 
 ### 4b. Pick a tool
 
@@ -407,6 +598,42 @@ STEP 5: DEPLOY
   Write kata-state.json outcome
   sync_state_to_supabase(state_key="campaigns", ...)
 
+  Include triage data in the campaign entry:
+  ```json
+  {
+    "triage": {
+      "wf_favorable_sharpe": 0.85,
+      "wf_unfavorable_sharpe": -0.42,
+      "wf_per_window": [0.80, -0.30, 0.90, -0.20],
+      "wf_trades_per_window": [9, 14, 17, 10],
+      "total_oos_trades": 23,
+      "oos_significance": "weak",
+      "high_regime_dependency": false,
+      "favorable_windows": [0, 2],
+      "regime_gated": true,
+      "wf_pattern": "ALTERNATING",
+      "improvements_applied": 2,
+      "low_trade_count": true,
+      "extended_validation": true
+    }
+  }
+  ```
+
+  Fields:
+  - wf_favorable_sharpe: avg of positive WF windows
+  - wf_unfavorable_sharpe: avg of negative WF windows (0 if none)
+  - wf_per_window: Sharpe per WF window
+  - wf_trades_per_window: trade count per WF window
+  - total_oos_trades: sum of trades in positive windows only
+  - oos_significance: "reliable" (>=30) | "weak" (10-29) | "noise" (<10)
+  - high_regime_dependency: true if unfavorable Sharpe between -0.5 and -1.0
+  - favorable_windows: indices of positive windows
+  - regime_gated: true (always for paper bots)
+  - wf_pattern: CONSISTENT/DEGRADING/ALTERNATING/SINGLE_SPIKE
+  - improvements_applied: count of kept experiments from Step 4
+  - low_trade_count: true if total_oos_trades < 30
+  - extended_validation: true if validation period extended (+50%)
+
   Post to feed: "Deployed: {strategy} on {pair}/{tf} — favorable
     Sharpe {s}. Validating {days} days.
     Expected ~{expected_trades} trades (need {min_trades})."
@@ -448,21 +675,96 @@ Use a ClawTeam worker for the sweep:
 KATA PLANNING
 ===============================================================================
 
-Before Round 1, write a plan (30 seconds, not a tool call):
+Before Round 1, the agent MUST read institutional memory and
+write a plan. This is not optional — skipping it means repeating
+failed experiments.
+
+### Step A: Retrieve prior findings (1 tool call)
+
+  List all completed Katas for the target archetype:
+    ls kata-history/kata_*_{archetype}_*.json
+
+  For each file found, extract:
+    - gap (pair, timeframe)
+    - obstacles encountered (name + description)
+    - experiments tried (change, tool, metric before→after, kept/reverted)
+    - final outcome (deployed at Sharpe X / stuck / dropped)
+    - key learning (the "Learning:" line from each experiment)
+
+  If no history exists for this archetype:
+    Note: "First Kata for {archetype}. No prior findings."
+
+  Also check for adjacent archetypes in the same correlation group:
+    trend: check both TREND_MOMENTUM and BREAKOUT history
+    range: check both MEAN_REVERSION and RANGE_BOUND history
+    vol: check both SCALPING and VOLATILITY_HARVEST history
+    carry: CARRY_FUNDING only (no adjacent)
+    Adjacent findings may share obstacle patterns (e.g., "falling
+    knife entries" affects all range-group strategies)
+
+### Step B: Write the plan with hard constraints
 
   KATA PLAN
   Gap: {archetype} on {pair}/{tf} (group: {group}, {n} graduates)
   Best lead: {source — triage hit / library / need to BUILD}
   Approach: {measure -> improve {what} / measure -> deploy if passes}
-  Obstacle hypothesis: {expected problem from archetype history}
-  Exit condition: favorable Sharpe >= 0.5 OR all rounds complete
-  Fallback: deploy at 0.3+ / pivot to different candidate
+
+  PRIOR FINDINGS ({n} past Katas for this archetype):
+    - {pair}/{tf}: {outcome}. Key learning: {summary}
+    - {pair}/{tf}: {outcome}. Key learning: {summary}
+
+  HARD CONSTRAINTS (from prior findings):
+    DO NOT: {list of experiments that failed across multiple Katas}
+    DO: {list of approaches that worked}
+    WATCH FOR: {common obstacles for this archetype}
+
+  EXIT CONDITION: favorable Sharpe >= 0.5 with >= 30 OOS trades
+  FALLBACK: deploy at 0.3+ if >= 10 OOS trades (extended warm-up)
+
+  TOOL GUIDANCE (from prior obstacle taxonomy):
+    For {category} obstacles: {tool} worked {n}% of the time.
+    Default tool for this obstacle type: {best_tool}.
+
+    After 20+ Katas, the agent can compute success rates per category:
+      For entry_timing: code_edit 67%, hyperopt 33%, autoresearch 50%
+      For param_overfit: hyperopt 75%, code_edit 25%
+      → Use the highest-success tool for the obstacle category.
+      → The 80% code-edit heuristic becomes data-driven tool selection.
+
+  Example:
+
+  KATA PLAN
+  Gap: MEAN_REVERSION on INJ/1h (group: range, 0 graduates)
+  Best lead: MeanReversionQuant from triage matrix (Sharpe 0.39)
+  Approach: measure baseline, improve win rate + exit timing
+
+  PRIOR FINDINGS (3 past Katas for MEAN_REVERSION):
+    - SOL/1d: dropped. 6 signal variants all caught falling knives
+      in 2022-2024 bearish regime. Root cause: altcoins in BEARISH
+      TRANQUIL at H4_LONG. MR longs fail when macro trend is down.
+    - ETH/4h: deployed at Sharpe 0.89. ADX < 20 filter helped
+      (+7% win rate). Volume filter didn't help. Tighter stoploss
+      helped (-1.8% DD). Best: BB 2.0 + strict EMA200.
+    - ETH/1d: dropped. Same falling knife pattern as SOL/1d.
+      2 trades in 450 days — insufficient sample.
+
+  HARD CONSTRAINTS:
+    DO NOT: use volume filter (tested 2x, never improved results)
+    DO NOT: deploy 1d timeframe for MR (insufficient trades)
+    DO: start with ADX + stoploss combination (worked on ETH/4h)
+    DO: check EMA200 alignment before MR longs (falling knife guard)
+    WATCH FOR: win rate < 35% (common MR obstacle, entry timing)
+
+  EXIT CONDITION: favorable Sharpe >= 0.5 with >= 30 OOS trades
+  FALLBACK: deploy at 0.3+ with extended warm-up
+
+### Step C: Inject constraints into Round 3 worker prompt
+
+  When spawning the ClawTeam worker for Round 3, append the
+  HARD CONSTRAINTS to the worker prompt (see Round 3 worker
+  spawn section below — the PRIOR KATA FINDINGS block).
 
 Check the plan at every round exit. Drifting? Update or refocus.
-
-Read kata-history/ for this archetype before writing the plan.
-Past Katas tell you which obstacles are common and which experiments
-worked or failed. Don't repeat failed experiments.
 
 
 ===============================================================================
@@ -551,6 +853,20 @@ Wolf can count tool calls. Wolf cannot count minutes.
       progress, try hyperopt. If hyperopt doesn't help, try
       autoresearch (parallel structural mutations). If nothing
       works after 10 experiments, stop and report.
+
+      PRIOR KATA FINDINGS (do not repeat these):
+      {paste the HARD CONSTRAINTS section from the Kata plan}
+
+      These experiments were tried in previous Katas for this
+      archetype and either failed or succeeded. Use this knowledge:
+      - Skip experiments marked DO NOT
+      - Start with approaches marked DO
+      - Watch for obstacles marked WATCH FOR
+
+      If you encounter the same obstacle described in prior findings,
+      use the approach that worked before. If that approach was never
+      found, try a fundamentally different angle — don't repeat the
+      same failure pattern.
 
       When done, update kata-state.json:
         status: 'improved' or 'stuck'

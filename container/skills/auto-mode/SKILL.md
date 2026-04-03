@@ -301,21 +301,48 @@ orderflow_fetch_regime(symbols=[<all_pairs>], horizon="H3_MEDIUM")
 ```
 Update `market-prior.json` with fresh regime data.
 
-**For each warm-up bot:**
+**For each warm-up or proven bot:**
 ```
 cell_composite = composite score for this strategy's archetype + pair
                  from cell-grid-latest.json
 
-If cell_composite >= 3.5 AND was below for previous tick:
-  signals_active = true (start sending entry/exit signals)
+TURNING SIGNALS ON (requires 2 consecutive ticks above):
+  If signals_active == false:
+    If cell_composite >= 3.5:
+      consecutive_above += 1
+      If consecutive_above >= 2:
+        signals_active = true
+        consecutive_above = 0
+        Post: "{strategy}: signals ON — regime favorable
+          for 2 consecutive checks"
+    Else:
+      consecutive_above = 0  (reset counter)
 
-If cell_composite < 3.5 for 2 consecutive ticks:
-  signals_active = false (pause signals, bot stays alive)
+TURNING SIGNALS OFF (requires 2 consecutive ticks below):
+  If signals_active == true:
+    If cell_composite < 3.5:
+      consecutive_below += 1
+      If consecutive_below >= 2:
+        signals_active = false
+        consecutive_below = 0
+        Post: "{strategy}: signals OFF — regime unfavorable
+          for 2 consecutive checks"
+    Else:
+      consecutive_below = 0  (reset counter)
+
+Store counters in campaign.paper_trading:
+  consecutive_above: 0
+  consecutive_below: 0
 ```
 
-**Hysteresis:** Require 2 consecutive ticks below threshold before
-turning signals off. This prevents churn when composite oscillates
-around 3.5.
+**Hysteresis (symmetric, both directions):** Require 2 consecutive
+ticks in EITHER direction before toggling signals. This prevents:
+  Tick 1: composite 3.6 → counter=1, still OFF
+  Tick 2: composite 3.4 → counter reset
+  Tick 3: composite 3.7 → counter=1, still OFF
+  Tick 4: composite 3.8 → counter=2, NOW ON (stable regime confirmed)
+Entries only fire after regime confirmed favorable for 30+ minutes
+(2 × 15-minute ticks). Eliminates same-tick on/off signal churn.
 
 **Regime-blocked tracking (for each warm-up bot):**
 ```
@@ -362,11 +389,24 @@ max_dd = archetype.graduation_gates.max_drawdown_pct
 ```
 
 **TRIGGER A — Catastrophic drawdown (immediate)**
-  `abs(current_max_dd) > max_dd × 1.5`
+
+  Read archetype max_dd from archetypes.yaml.
+
+  If campaign.triage.high_regime_dependency == true:
+    dd_multiplier = 1.0  (tighter — less room for error)
+  Else:
+    dd_multiplier = 1.5  (standard)
+
+  `abs(current_max_dd) > max_dd × dd_multiplier`
   Reason: `"drawdown_exceeded"`
 
   A strategy losing this much is dangerous even on paper.
   This is a safety circuit breaker, not a performance judgment.
+
+  High-regime-dependency bots (unfavorable Sharpe between -0.5
+  and -1.0) get retired at 1.0× the archetype max drawdown
+  instead of 1.5×. They have less margin for error because if
+  regime gating fails, the downside is steep.
 
   → Retire immediately. Stop bot. Free slot.
 
@@ -624,6 +664,47 @@ When 3+ bots have run concurrently for 7+ days:
     Sharpe {ps}, projected return {ret}%. Target: 1.33 / 80%."
     tags: ["portfolio", "analysis"]
 
+### Step 8b: REGIME TRANSITION FREQUENCIES (weekly, Sunday 00:00)
+
+Skip unless current day == Sunday AND last_transition_update was last week.
+
+Compute from market-prior.json tick history (106+ ticks logged):
+
+For each pair and timeframe, count regime transitions:
+  For each tick where regime changed from A to B:
+    increment transitions[pair][tf][A→B]
+
+Build a transition probability table:
+  P(next_regime | current_regime, pair, tf) =
+    count(current→next) / count(current→any)
+
+Store in /workspace/group/auto-mode/regime-transitions.json:
+  ```json
+  {
+    "BTC/USDT:USDT": {
+      "4h": {
+        "TRANQUIL": {
+          "→ TRANQUIL": 0.55,
+          "→ COMPRESSION": 0.20,
+          "→ EFFICIENT_TREND": 0.20,
+          "→ CHAOS": 0.05,
+          "sample_size": 40
+        },
+        "EFFICIENT_TREND": {
+          "→ EFFICIENT_TREND": 0.60,
+          "→ TRANQUIL": 0.25,
+          "→ COMPRESSION": 0.10,
+          "→ CHAOS": 0.05,
+          "sample_size": 35
+        }
+      }
+    },
+    "last_updated": "2026-04-06T00:00:00Z"
+  }
+  ```
+
+sync_state_to_supabase(state_key="regime_transitions", ...)
+
 ### Step 9: LOG + SYNC
 
 Write all state changes to aphexDATA:
@@ -643,7 +724,17 @@ aphexdata_record_event(
 )
 ```
 
-Sync campaigns.json + portfolio-correlation.json to Supabase.
+Sync ALL critical state files to Supabase:
+  sync_state_to_supabase(state_key="campaigns", ...)
+  sync_state_to_supabase(state_key="triage_matrix", ...)
+  sync_state_to_supabase(state_key="roster", ...)
+  sync_state_to_supabase(state_key="portfolio_correlation", ...)
+  sync_state_to_supabase(state_key="kata_state", ...)
+  sync_state_to_supabase(state_key="market_prior", ...)
+  sync_state_to_supabase(state_key="regime_transitions", ...)
+
+This serves as a backup mechanism — all institutional memory is
+recoverable from Supabase if local files are lost.
 
 **Message user only on state transitions:**
 - Graduation, retirement, slot fill, correlation alert
