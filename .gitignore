@@ -63,6 +63,7 @@ container/skills/research-metrics/
 container/skills/signal-marketplace/
 container/skills/signal-webhooks/
 container/skills/agent-feed/
+container/skills/aphexdata/
 
 # Application overview (local only)
 .systemdocs/
