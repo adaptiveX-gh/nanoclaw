@@ -396,9 +396,7 @@ function loadResearchData(): {
           );
         }
 
-        const rising = [...newTrendBoosts.values()].filter(
-          (v) => v > 0,
-        ).length;
+        const rising = [...newTrendBoosts.values()].filter((v) => v > 0).length;
         const falling = [...newTrendBoosts.values()].filter(
           (v) => v < 0,
         ).length;
@@ -602,9 +600,8 @@ export async function runConsoleSync(
         roster: research.roster.length,
         campaigns: campaigns.length,
         cellGrid: research.cellGrid.length,
-        trendBoosted: research.cellGrid.filter(
-          (c: any) => c.trend_boost !== 0,
-        ).length,
+        trendBoosted: research.cellGrid.filter((c: any) => c.trend_boost !== 0)
+          .length,
         triageMatrix: triageMatrix.length,
       },
       '[console-sync] Push complete',
