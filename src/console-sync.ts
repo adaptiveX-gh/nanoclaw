@@ -247,21 +247,16 @@ function loadResearchData(): {
         : [];
 
       // Gap report — scout's authoritative gap scores
-      const gapReportFile = path.join(
-        groupDir,
-        'reports',
-        'gap-report.json',
-      );
+      const gapReportFile = path.join(groupDir, 'reports', 'gap-report.json');
       const gapScoreMap = new Map<string, number>();
       if (fs.existsSync(gapReportFile)) {
         try {
-          const gapData = JSON.parse(
-            fs.readFileSync(gapReportFile, 'utf-8'),
-          );
+          const gapData = JSON.parse(fs.readFileSync(gapReportFile, 'utf-8'));
           for (const g of gapData.top_gaps ?? []) {
             // gap-report uses short pairs (e.g. "XRP"), cell grid uses full (e.g. "XRP/USDT:USDT")
-            const pairFull =
-              g.pair.includes('/') ? g.pair : `${g.pair}/USDT:USDT`;
+            const pairFull = g.pair.includes('/')
+              ? g.pair
+              : `${g.pair}/USDT:USDT`;
             gapScoreMap.set(
               `${g.archetype}:${pairFull}:${g.timeframe}`,
               g.gap_score,
@@ -289,12 +284,9 @@ function loadResearchData(): {
       const deployedMap = new Map<string, string>();
       if (fs.existsSync(deploymentsFile)) {
         try {
-          const depData = JSON.parse(
-            fs.readFileSync(deploymentsFile, 'utf-8'),
-          );
+          const depData = JSON.parse(fs.readFileSync(deploymentsFile, 'utf-8'));
           for (const d of depData.deployments ?? []) {
-            if (!['active', 'shadow', 'throttled'].includes(d.state))
-              continue;
+            if (!['active', 'shadow', 'throttled'].includes(d.state)) continue;
             for (const pair of d.pairs ?? []) {
               deployedMap.set(
                 `${d.archetype}:${pair}:${d.timeframe}`,
