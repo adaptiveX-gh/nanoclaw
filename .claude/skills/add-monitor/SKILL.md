@@ -184,4 +184,4 @@ step (Step 4) on the next check cycle will detect and fix the mismatch automatic
 
 ### Strategy not matched to archetype
 Strategies need `# ARCHETYPE: <name>` header tags to be matched. Add the tag to the first
-10 lines of the strategy `.py` file. ClawTeam's graduation step should add these automatically.
+10 lines of the strategy `.py` file. Kata's graduation step should add these automatically.

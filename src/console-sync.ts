@@ -172,7 +172,7 @@ function loadDeployments(): any[] {
 }
 
 function loadCampaigns(): { campaigns: any[]; budget: any | null } {
-  // Campaigns live under groups/<folder>/research-planner/campaigns.json
+  // Campaigns live under groups/<folder>/research-planner/campaigns.json (legacy path)
   const allCampaigns: any[] = [];
   let budget: any | null = null;
   try {
