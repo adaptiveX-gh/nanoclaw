@@ -178,6 +178,8 @@ function readMarketPrior(): any | null {
 
 const activeBots = new Map<string, BotInstance>();
 const portMap = new Map<number, string>(); // port → deploymentId
+const processingRequests = new Set<string>(); // request IDs currently in-flight
+const startingDeployments = new Set<string>(); // deployment IDs currently starting
 let running = false;
 let deps: BotRunnerDeps | undefined;
 let healthCheckTimer: ReturnType<typeof setInterval> | undefined;
@@ -216,9 +218,13 @@ function notifyUser(chatJid: string | undefined, text: string): void {
     );
 }
 
-function allocatePort(): number | null {
+function allocatePort(deploymentId: string): number | null {
   for (let p = BASE_PORT; p < BASE_PORT + MAX_BOTS; p++) {
-    if (!portMap.has(p)) return p;
+    if (!portMap.has(p)) {
+      portMap.set(p, deploymentId); // reserve immediately to prevent race
+      savePortMap();
+      return p;
+    }
   }
   return null;
 }
@@ -501,6 +507,15 @@ function removeContainer(containerName: string): void {
 
 async function startBotContainer(req: BotRequest): Promise<BotInstance> {
   const deploymentId = req.deployment_id;
+
+  // Per-deployment mutex: prevent concurrent starts of the same bot
+  if (startingDeployments.has(deploymentId)) {
+    throw new Error(
+      `Bot ${deploymentId} is already starting — duplicate start ignored`,
+    );
+  }
+  startingDeployments.add(deploymentId);
+
   const containerName = `${CONTAINER_PREFIX}${deploymentId}`;
   const strategy = req.strategy_name!;
   const pair = req.pair!;
@@ -524,8 +539,8 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
     activeBots.delete(deploymentId);
   }
 
-  // Allocate port
-  const port = allocatePort();
+  // Allocate port (reserves in portMap atomically)
+  const port = allocatePort(deploymentId);
   if (port === null) {
     throw new Error(
       `No free ports available (max ${MAX_BOTS} bots, base port ${BASE_PORT})`,
@@ -619,11 +634,23 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
   }
 
   if (lastStartError) {
+    // Release the pre-reserved port on failure
+    portMap.delete(port);
+    savePortMap();
+    startingDeployments.delete(deploymentId);
     throw lastStartError;
   }
 
   // Wait for FreqTrade API to accept connections before returning
-  await waitForBotReady(port, password);
+  try {
+    await waitForBotReady(port, password);
+  } catch (err) {
+    // Release port and mutex on readiness failure
+    portMap.delete(port);
+    savePortMap();
+    startingDeployments.delete(deploymentId);
+    throw err;
+  }
 
   const bot: BotInstance = {
     deploymentId,
@@ -640,9 +667,9 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
   };
 
   activeBots.set(deploymentId, bot);
-  portMap.set(port, deploymentId);
-  savePortMap();
+  // Port already reserved by allocatePort() — no need to set again
   writeBotStatus(bot);
+  startingDeployments.delete(deploymentId);
 
   return bot;
 }
@@ -914,11 +941,17 @@ async function processRequest(requestFile: string): Promise<void> {
   const statusPath = path.join(REQUEST_DIR, `${requestId}.status.json`);
   if (fs.existsSync(statusPath)) return;
 
+  // Skip if this request is already being processed (prevents concurrent
+  // invocations from the poll loop while docker run is still in progress)
+  if (processingRequests.has(requestId)) return;
+  processingRequests.add(requestId);
+
   const requestPath = path.join(REQUEST_DIR, requestFile);
   let req: BotRequest;
   try {
     req = JSON.parse(fs.readFileSync(requestPath, 'utf-8'));
   } catch (e) {
+    processingRequests.delete(requestId);
     logger.error({ err: e, requestId }, 'Failed to read bot request');
     return;
   }
@@ -1044,6 +1077,8 @@ async function processRequest(requestFile: string): Promise<void> {
       chatJid,
       `Bot request failed (${req.type} ${req.deployment_id}): ${msg}`,
     );
+  } finally {
+    processingRequests.delete(requestId);
   }
 }
 
