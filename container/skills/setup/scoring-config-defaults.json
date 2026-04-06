@@ -1,0 +1,105 @@
+{
+  "_comment": "Reference defaults for all tunable thresholds. Copy to {WORKSPACE}/scoring-config.json to override. Keys match docs/execution-gates.md and docs/portfolio-rules.md.",
+
+  "COMPOSITE_WEIGHTS": {
+    "regime_fit": 0.4,
+    "execution_fit": 0.25,
+    "net_edge": 0.35
+  },
+
+  "DEPLOY_THRESHOLD": 3.5,
+  "UNDEPLOY_THRESHOLD": 2.0,
+
+  "SIGNAL_HYSTERESIS_TICKS": 2,
+
+  "MACRO_OVERLAY": {
+    "risk_off_penalty": -0.5,
+    "risk_on_trend_boost": 0.3,
+    "sentiment_extreme_penalty": -0.5,
+    "narrative_alignment_boost": 0.2
+  },
+
+  "PORTFOLIO_CONSTRAINTS": {
+    "max_per_archetype": 5,
+    "max_per_pair": 3,
+    "max_total_deployments": 20,
+    "max_capital_per_deployment_pct": 10,
+    "max_capital_per_archetype_pct": 25,
+    "max_capital_per_pair_pct": 15
+  },
+
+  "CIRCUIT_BREAKER": {
+    "dd_threshold_pct": 15
+  },
+
+  "SENTIMENT_MULTIPLIER": {
+    "floor": 0.4,
+    "scaling_factor": 0.6
+  },
+
+  "RETIREMENT_GATES": {
+    "catastrophic_dd_multiplier": 1.5,
+    "catastrophic_dd_multiplier_high_regime_dep": 1.0,
+    "consecutive_losses_count": 5,
+    "consecutive_losses_pct": 5,
+    "dead_container_consecutive_checks": 2
+  },
+
+  "GRADUATION_GATES": {
+    "min_live_sharpe_default": 0.5,
+    "max_drawdown_pct_default": 15,
+    "publishing_sharpe_threshold": 0.8
+  },
+
+  "GAP_SCORING_WEIGHTS": {
+    "COMPOSITE_SCORE": 2.0,
+    "GROUP_DIVERSITY": 5.0,
+    "ARCHETYPE_ZERO_COVERAGE": 3.0,
+    "TIMEFRAME_FREQUENCY": 2.0,
+    "REGIME_MATCH": 3.0,
+    "QUALIFIER_BOOST": 3.0,
+    "EDGE_BONUS_HIGH": 2.0,
+    "EDGE_BONUS_MID": 1.0,
+    "DEPLOYMENT_FAILURE_PENALTY": -3.0,
+    "DEPLOYMENT_CHURN_PENALTY_PER_CYCLE": -1.0,
+    "DEPLOYMENT_CHURN_CAP": -5.0,
+    "PERSISTENCE_BONUS_PER_SNAPSHOT": 0.5,
+    "PERSISTENCE_CAP": 3.0,
+    "ABANDONED_CAMPAIGN_PENALTY": -2.0,
+    "ACTIVE_CAMPAIGN_BONUS": 1.0,
+    "FAR_FROM_DEPLOY_PENALTY": -2.0,
+    "STABILITY_WEIGHT": 1.5,
+    "FALLING_TREND_PENALTY": -0.5,
+    "GRADUATION_SPEED_WEIGHT": 2.0,
+    "ANTI_REGIME_PENALTY": -5.0,
+    "ACTIVE_KATA_PENALTY": -10.0,
+    "ACTIVE_TRIAGE_PENALTY": -8.0,
+    "NO_CELL_DATA_PENALTY": -10.0
+  },
+
+  "TIMEFRAME_FREQUENCY_BONUS": {
+    "5m": 1.0,
+    "15m": 1.0,
+    "1h": 0.7,
+    "4h": 0.3
+  },
+
+  "NET_EDGE_REBALANCE": {
+    "enabled_when_all_zero": true,
+    "adjusted_weights": {
+      "regime_fit": 0.62,
+      "execution_fit": 0.38
+    }
+  },
+
+  "VOLUME_WEIGHT": {
+    "normalization": "max_liquidity_percentile"
+  },
+
+  "TREND_BOOST": {
+    "rising_threshold": 0.3,
+    "rising_boost": 0.2,
+    "falling_threshold": -0.3,
+    "falling_penalty": -0.1
+  }
+}

@@ -1,15 +1,15 @@
 ---
 name: add-archetype-taxonomy
 description: >
-  Add the canonical 7-archetype strategy taxonomy, 560-cell scoring grid schema,
-  and portfolio constraints for the Market Timing Agent. No MCP server — just config
-  files and an agent-facing reference doc.
+  Add the canonical 7-archetype strategy taxonomy, configurable cell scoring grid schema
+  (default 560 cells), and portfolio constraints for the Market Timing Agent. No MCP server
+  — just config files and an agent-facing reference doc.
 ---
 
 # Add Archetype Taxonomy
 
-Defines the 7 strategy archetypes, their regime preferences, the 560-cell grid schema
-(7 archetypes × 20 pairs × 4 timeframes), scoring rubrics, and portfolio constraints.
+Defines the 7 strategy archetypes, their regime preferences, the cell grid schema
+(default 7 × 20 × 4 = 560 cells, configurable via instance-config.json), scoring rubrics, and portfolio constraints.
 
 ## Phase 1: Pre-flight
 

@@ -1,0 +1,36 @@
+{
+  "_comment": "Default portfolio allocation rules. Copy to {WORKSPACE}/portfolio-rules.json to override. Mutated by iterate_portfolio.py, measured by position_replay.py.",
+
+  "DEPLOYMENT_LIMITS": {
+    "max_per_archetype": 5,
+    "max_per_pair": 3,
+    "max_total_deployments": 20
+  },
+
+  "CAPITAL_ALLOCATION": {
+    "base_stake_pct": 5,
+    "max_per_deployment_pct": 10,
+    "max_per_archetype_pct": 25,
+    "max_per_pair_pct": 15
+  },
+
+  "CIRCUIT_BREAKER": {
+    "dd_threshold_pct": 15
+  },
+
+  "CORRELATION": {
+    "max_avg_pairwise": 0.30,
+    "group_diversity_target": 4
+  },
+
+  "GRADUATION_GATES": {
+    "min_live_sharpe": 0.5,
+    "max_drawdown_pct": 15,
+    "publishing_sharpe_threshold": 0.8
+  },
+
+  "SIZING": {
+    "sentiment_floor": 0.4,
+    "sentiment_scaling_factor": 0.6
+  }
+}

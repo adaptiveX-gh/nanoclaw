@@ -1,15 +1,15 @@
 ---
 name: add-market-timing
 description: >
-  Add the Market Timing Agent orchestration skill. Scores 560 cells (7 archetypes ×
-  20 pairs × 4 timeframes), produces deployment rotation plans, and manages portfolio risk.
+  Add the Market Timing Agent orchestration skill. Scores all cells in the grid (7 archetypes ×
+  configured pairs × 4 timeframes, default 560), produces deployment rotation plans, and manages portfolio risk.
   Requires: orderflow, macro-sentiment, onchain-intel, ct-sentiment, archetype-taxonomy,
   freqtrade-mcp, aphexdata.
 ---
 
 # Add Market Timing Agent
 
-The capstone orchestration skill. Runs a scoring cycle across 560 cells, diffs against
+The capstone orchestration skill. Runs a scoring cycle across all cells (default 560), diffs against
 current deployments, generates rotation plans, and logs everything to aphexDATA.
 
 ## Phase 1: Pre-flight
@@ -41,7 +41,7 @@ If any dependency is missing, install it first using the corresponding `/add-*` 
 
 Create `container/skills/market-timing/SKILL.md` with the full orchestration workflow:
 - Phase 1: Gather data (regime, microstructure, context reports, previous grid)
-- Phase 2: Score all 560 cells (regime_fit, execution_fit, net_edge, composite)
+- Phase 2: Score all cells (regime_fit, execution_fit, net_edge, composite)
 - Phase 3: Rank and apply portfolio constraints
 - Phase 4: Deployment diff (target vs current → rotation plan)
 - Phase 5: Execute (deploy/undeploy with aphexDATA logging)
@@ -93,7 +93,7 @@ npm run dev
 ### Test scoring only (no deployment)
 Ask the agent:
 ```
-"Score all 560 cells and show me the top 10"
+"Score all cells and show me the top 10"
 ```
 
 Expected: Agent reads archetype taxonomy, calls orderflow tools, scores cells, shows ranked table.

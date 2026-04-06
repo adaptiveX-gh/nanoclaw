@@ -1,14 +1,14 @@
 ---
 name: archetype-taxonomy
 description: >
-  Canonical definition of 7 strategy archetypes, 560-cell scoring grid, and portfolio
-  constraints for the Market Timing Agent. Reference this when scoring cells,
+  Canonical definition of 7 strategy archetypes, configurable cell scoring grid (default 560 cells),
+  and portfolio constraints for the Market Timing Agent. Reference this when scoring cells,
   mapping strategies to archetypes, or evaluating deployment readiness.
 ---
 
 # Archetype Taxonomy — Strategy Classification & Cell Scoring
 
-Defines the 7 archetypes, their regime preferences, the 560-cell grid schema (7 × 20 × 4),
+Defines the 7 archetypes, their regime preferences, the cell grid schema (default 7 × 20 × 4 = 560),
 scoring rubrics for regime_fit/execution_fit/net_edge, and portfolio constraints.
 
 ## The 7 Archetypes
@@ -31,16 +31,21 @@ scoring rubrics for regime_fit/execution_fit/net_edge, and portfolio constraints
 | **T2** | DOGE, ADA, AVAX, LINK, TON | Good | Most archetypes except scalping |
 | **T3** | SUI, DOT, SHIB, NEAR, UNI | Moderate | Trend, range, mean-reversion, carry |
 | **T4** | LTC, BCH, APT, ARB, OP | Adequate | Wider spreads, execution_fit naturally lower |
+| **T5** | (user-added via instance-config.json) | Lowest assumed | Not in preferred_pairs; execution_fit handles liquidity |
 
-All 20 pairs appear in the grid. Execution_fit scoring handles liquidity — low-liquidity pairs
+All default pairs appear in the grid. Additional pairs can be added via `instance-config.json`
+(see exchange-config skill). Execution_fit scoring handles liquidity — low-liquidity pairs
 get lower execution_fit scores, which keeps composites below deploy threshold for archetypes
 that need tight spreads. Preferred_pairs is advisory guidance for research prioritization.
 
 ## Cell Grid
 
-**Dimensions:** 7 archetypes × 20 pairs × 4 timeframes = **560 cells**
+**Default dimensions:** 7 archetypes × 20 pairs × 4 timeframes = **560 cells**
 
-**Pairs:** BTC, ETH, SOL, XRP, BNB, DOGE, ADA, AVAX, LINK, TON, SUI, DOT, SHIB, NEAR, UNI, LTC, BCH, APT, ARB, OP
+The pair list can be extended or reduced via `instance-config.json` (see exchange-config skill).
+Effective cell count = 7 × effective_pair_count × 4.
+
+**Default pairs (20):** BTC, ETH, SOL, XRP, BNB, DOGE, ADA, AVAX, LINK, TON, SUI, DOT, SHIB, NEAR, UNI, LTC, BCH, APT, ARB, OP
 **Timeframes:** 5m, 15m, 1h, 4h
 
 Each cell stores:
