@@ -208,8 +208,8 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          // Don't auto-forward: scheduled tasks use send_message MCP tool explicitly.
+          // Auto-forwarding causes duplicates since the agent already sends via IPC.
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
