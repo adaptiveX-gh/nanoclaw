@@ -896,6 +896,12 @@ async function postTradeEvent(
 
   if (!aphexUrl || !apiKey) return;
 
+  // Read regime context (same helpers used by webhook dispatch)
+  const deployment = readDeployment(deploymentId);
+  const marketPrior = readMarketPrior();
+  const pairBase = (status.pair || '').split('/')[0];
+  const regimeData = marketPrior?.regimes?.[pairBase]?.['H2_SHORT'];
+
   const body = {
     agent_id: agentId || undefined,
     verb_id: 'trade_detected',
@@ -911,6 +917,10 @@ async function postTradeEvent(
       trade_count: status.paper_pnl?.trade_count ?? 0,
       profit_pct: status.paper_pnl?.profit_pct ?? 0,
       win_rate: status.paper_pnl?.win_rate ?? 0,
+      regime: regimeData?.regime || deployment?.last_regime || null,
+      regime_conviction:
+        regimeData?.conviction || deployment?.last_conviction || null,
+      archetype: deployment?.archetype || null,
     },
     context: {
       source: 'bot_runner',

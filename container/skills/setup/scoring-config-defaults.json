@@ -42,13 +42,28 @@
     "catastrophic_dd_multiplier_high_regime_dep": 1.0,
     "consecutive_losses_count": 5,
     "consecutive_losses_pct": 5,
-    "dead_container_consecutive_checks": 2
+    "dead_container_consecutive_checks": 2,
+    "win_rate_floor": 0.25,
+    "win_rate_floor_low_rr_archetypes": 0.20,
+    "rr_inversion_win_rate_min": 0.45,
+    "rr_inversion_pnl_threshold": -1.0
   },
 
   "GRADUATION_GATES": {
     "min_live_sharpe_default": 0.5,
     "max_drawdown_pct_default": 15,
-    "publishing_sharpe_threshold": 0.8
+    "publishing_sharpe_threshold": 0.8,
+    "min_win_rate": 0.35,
+    "min_win_rate_low_rr_archetypes": 0.28,
+    "min_rr_ratio": 0.8,
+    "max_consecutive_losses": 4
+  },
+
+  "DEPLOY_VERIFICATION": {
+    "enabled": true,
+    "min_win_rate": 0.30,
+    "lookback_days": 30,
+    "max_per_tick": 3
   },
 
   "GAP_SCORING_WEIGHTS": {
