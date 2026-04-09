@@ -36,8 +36,12 @@ function runScript(script: string, args: object): Promise<SkillResult> {
     });
 
     let stdout = '';
+    let stderr = '';
     proc.stdout.on('data', (data: Buffer) => {
       stdout += data.toString();
+    });
+    proc.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
     });
 
     proc.stdin.write(JSON.stringify(args));
@@ -51,9 +55,10 @@ function runScript(script: string, args: object): Promise<SkillResult> {
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
+        const detail = stderr.trim().slice(-500);
         resolve({
           success: false,
-          message: `Script exited with code: ${code}`,
+          message: `Script exited with code: ${code}${detail ? ` — ${detail}` : ''}`,
         });
         return;
       }
@@ -164,6 +169,24 @@ export async function handleXIpc(
       result = await runScript('quote', {
         tweetUrl: data.tweetUrl,
         comment: data.comment,
+      });
+      break;
+
+    case 'x_read_timeline':
+      result = await runScript('read_timeline', {
+        count: data.count ?? 20,
+      });
+      break;
+
+    case 'x_search':
+      if (!data.query) {
+        result = { success: false, message: 'Missing query' };
+        break;
+      }
+      result = await runScript('search', {
+        query: data.query,
+        count: data.count ?? 20,
+        tab: data.tab ?? 'latest',
       });
       break;
 

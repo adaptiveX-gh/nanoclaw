@@ -29,7 +29,7 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
-async function waitForResult(requestId: string, maxWait = 60000): Promise<{ success: boolean; message: string }> {
+async function waitForResult(requestId: string, maxWait = 60000): Promise<{ success: boolean; message: string; data?: unknown }> {
   const resultFile = path.join(RESULTS_DIR, `${requestId}.json`);
   const pollInterval = 1000;
   let elapsed = 0;
@@ -193,6 +193,62 @@ server.tool(
     const result = await waitForResult(requestId);
     return {
       content: [{ type: 'text' as const, text: result.message }],
+      isError: !result.success,
+    };
+  },
+);
+
+server.tool(
+  'x_read_timeline',
+  `Read the authenticated user's X (Twitter) home timeline. Returns tweet text, author, metrics, and URLs. Main group only.`,
+  {
+    count: z.number().min(1).max(50).default(20).describe('Number of tweets to read (default 20, max 50)'),
+  },
+  async (args) => {
+    if (!isMain) return mainOnly();
+
+    const requestId = `xread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'x_read_timeline',
+      requestId,
+      count: args.count,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await waitForResult(requestId, 90000);
+    return {
+      content: [{ type: 'text' as const, text: result.success ? JSON.stringify(result.data ?? result.message) : result.message }],
+      isError: !result.success,
+    };
+  },
+);
+
+server.tool(
+  'x_search',
+  `Search X (Twitter) for tweets matching a query. Returns tweet text, author, metrics, and URLs. Main group only.`,
+  {
+    query: z.string().describe('Search query (e.g., "BTC", "from:elonmusk", "#crypto")'),
+    count: z.number().min(1).max(50).default(20).describe('Number of tweets to return (default 20, max 50)'),
+    tab: z.enum(['top', 'latest', 'people', 'media']).default('latest').describe('Search tab (default: latest)'),
+  },
+  async (args) => {
+    if (!isMain) return mainOnly();
+
+    const requestId = `xsearch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'x_search',
+      requestId,
+      query: args.query,
+      count: args.count,
+      tab: args.tab,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await waitForResult(requestId, 90000);
+    return {
+      content: [{ type: 'text' as const, text: result.success ? JSON.stringify(result.data ?? result.message) : result.message }],
       isError: !result.success,
     };
   },
