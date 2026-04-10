@@ -795,8 +795,9 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
       // not break the health check loop, so we wrap the trades fetch in its
       // own try/catch and fall back to previously persisted values.
       let sharpe = 0;
-      let dailyEquity: Array<{ date: string; cumulative_pnl_pct: number }> | undefined =
-        prevPnl?.daily_equity;
+      let dailyEquity:
+        | Array<{ date: string; cumulative_pnl_pct: number }>
+        | undefined = prevPnl?.daily_equity;
       try {
         const tradesRes = await ftApiCall(
           bot.port,
@@ -823,7 +824,9 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
           ? (profit.winning_trades / (profit.trade_count || 1)) * 100
           : 0,
         sharpe,
-        ...(dailyEquity && dailyEquity.length > 0 ? { daily_equity: dailyEquity } : {}),
+        ...(dailyEquity && dailyEquity.length > 0
+          ? { daily_equity: dailyEquity }
+          : {}),
         last_updated: new Date().toISOString(),
       };
     } else {

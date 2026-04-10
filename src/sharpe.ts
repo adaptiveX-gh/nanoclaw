@@ -39,7 +39,11 @@ export function computeSharpe(
  *   so the std reflects real calendar-time variance, not just active days.
  */
 function tradesToDailyReturns(
-  trades: Array<{ profit_ratio?: number; open_date?: string; close_date?: string }>,
+  trades: Array<{
+    profit_ratio?: number;
+    open_date?: string;
+    close_date?: string;
+  }>,
 ): number[] {
   const byDay = new Map<number, number>();
   for (const t of trades) {
@@ -75,7 +79,11 @@ function tradesToDailyReturns(
  * Result is clamped to [-10, 10] as a sanity cap.
  */
 export function computeTradeSharpe(
-  trades: Array<{ profit_ratio?: number; open_date?: string; close_date?: string }>,
+  trades: Array<{
+    profit_ratio?: number;
+    open_date?: string;
+    close_date?: string;
+  }>,
 ): number {
   if (!trades || trades.length < 2) return 0;
 
@@ -106,7 +114,11 @@ export function computeTradeSharpe(
  * per-trade returns and matches how the kata builds equity curves.
  */
 export function computeDailyEquityCurve(
-  trades: Array<{ profit_ratio?: number; open_date?: string; close_date?: string }>,
+  trades: Array<{
+    profit_ratio?: number;
+    open_date?: string;
+    close_date?: string;
+  }>,
 ): Array<{ date: string; cumulative_pnl_pct: number }> {
   const byDay = new Map<number, number>();
   for (const t of trades) {
@@ -127,7 +139,7 @@ export function computeDailyEquityCurve(
   const series: Array<{ date: string; cumulative_pnl_pct: number }> = [];
   let cum = 0;
   for (let d = minDay; d <= maxDay; d++) {
-    cum += (byDay.get(d) ?? 0);
+    cum += byDay.get(d) ?? 0;
     const dateStr = new Date(d * 86_400_000).toISOString().slice(0, 10);
     series.push({ date: dateStr, cumulative_pnl_pct: cum * 100 });
   }
