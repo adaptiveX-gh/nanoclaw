@@ -26,6 +26,7 @@ import http from 'http';
 import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { computeTradeSharpe, computeDailyEquityCurve } from './sharpe.js';
 import { dispatchSignal, type TradeEvent } from './webhook-dispatcher.js';
 
 // ─── Configuration ──────────────────────────────────────────────────
@@ -125,6 +126,8 @@ interface BotStatusFile {
     profit_pct: number;
     trade_count: number;
     win_rate: number;
+    sharpe: number;
+    daily_equity?: Array<{ date: string; cumulative_pnl_pct: number }>;
     last_updated: string;
   };
 }
@@ -297,6 +300,23 @@ function writeBotStatus(
   bot: BotInstance,
   extra?: Partial<BotStatusFile>,
 ): void {
+  const statusPath = path.join(BOTS_DIR, `${bot.deploymentId}.status.json`);
+
+  // Preserve transient fields (paper_pnl, last_health_check) across status
+  // updates that don't explicitly refresh them — stop, toggle, error, port
+  // rebind, etc. Without this, every non-getBotStatus() write wipes paper_pnl
+  // from disk and the dashboard regresses on win_rate and sharpe for stopped
+  // bots (peak_trade_count survives via the sync-ingest ratchet, but the
+  // jsonb paper_pnl field does not).
+  let prev: Partial<BotStatusFile> = {};
+  try {
+    if (fs.existsSync(statusPath)) {
+      prev = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+    }
+  } catch {
+    // Corrupt file — fall through and rewrite from scratch.
+  }
+
   const statusFile: BotStatusFile = {
     deployment_id: bot.deploymentId,
     status: bot.status,
@@ -309,10 +329,13 @@ function writeBotStatus(
     timeframe: bot.timeframe,
     dry_run: bot.dryRun,
     started_at: bot.startedAt,
+    ...(prev.paper_pnl ? { paper_pnl: prev.paper_pnl } : {}),
+    ...(prev.last_health_check
+      ? { last_health_check: prev.last_health_check }
+      : {}),
     ...(bot.error ? { error: bot.error } : {}),
     ...extra,
   };
-  const statusPath = path.join(BOTS_DIR, `${bot.deploymentId}.status.json`);
   fs.writeFileSync(statusPath, JSON.stringify(statusFile, null, 2));
 }
 
@@ -767,12 +790,40 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
     const profitRes = await ftApiCall(bot.port, 'GET', 'profit', bot.password);
     if (profitRes.status === 200) {
       const profit = JSON.parse(profitRes.body);
+
+      // Best-effort live Sharpe + equity curve from per-trade returns. Must
+      // not break the health check loop, so we wrap the trades fetch in its
+      // own try/catch and fall back to previously persisted values.
+      let sharpe = 0;
+      let dailyEquity: Array<{ date: string; cumulative_pnl_pct: number }> | undefined =
+        prevPnl?.daily_equity;
+      try {
+        const tradesRes = await ftApiCall(
+          bot.port,
+          'GET',
+          'trades?limit=200',
+          bot.password,
+        );
+        if (tradesRes.status === 200) {
+          const tradesData = JSON.parse(tradesRes.body);
+          const tradeList = tradesData.trades || [];
+          sharpe = computeTradeSharpe(tradeList);
+          dailyEquity = computeDailyEquityCurve(tradeList);
+        } else {
+          sharpe = prevPnl?.sharpe ?? 0;
+        }
+      } catch {
+        sharpe = prevPnl?.sharpe ?? 0;
+      }
+
       pnl = {
         profit_pct: profit.profit_all_percent || 0,
         trade_count: profit.trade_count || 0,
         win_rate: profit.winning_trades
           ? (profit.winning_trades / (profit.trade_count || 1)) * 100
           : 0,
+        sharpe,
+        ...(dailyEquity && dailyEquity.length > 0 ? { daily_equity: dailyEquity } : {}),
         last_updated: new Date().toISOString(),
       };
     } else {
@@ -917,6 +968,7 @@ async function postTradeEvent(
       trade_count: status.paper_pnl?.trade_count ?? 0,
       profit_pct: status.paper_pnl?.profit_pct ?? 0,
       win_rate: status.paper_pnl?.win_rate ?? 0,
+      sharpe: status.paper_pnl?.sharpe ?? 0,
       regime: regimeData?.regime || deployment?.last_regime || null,
       regime_conviction:
         regimeData?.conviction || deployment?.last_conviction || null,
