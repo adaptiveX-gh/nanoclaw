@@ -20,12 +20,77 @@
   },
 
   "PORTFOLIO_CONSTRAINTS": {
+    "_comment": "Slot Management spec lowered max_total_deployments from 20 → 10 (hard cap, see SLOT_MANAGEMENT.max_total_bots). max_per_archetype/pair remain as soft caps; max_per_group is the structural diversification constraint.",
     "max_per_archetype": 5,
     "max_per_pair": 3,
-    "max_total_deployments": 20,
+    "max_total_deployments": 10,
     "max_capital_per_deployment_pct": 10,
     "max_capital_per_archetype_pct": 25,
     "max_capital_per_pair_pct": 15
+  },
+
+  "SLOT_MANAGEMENT": {
+    "_comment": "10-bot slot lifecycle. Trial bots have hard deadlines and easy eviction; graduated bots earn protection but can be replaced when degrading. All values tunable by gate kata.",
+    "max_total_bots": 10,
+    "max_trial_bots": 5,
+    "trial_deadlines_days": {
+      "5m": 2,
+      "15m": 3,
+      "1h": 7,
+      "4h": 14
+    },
+    "trial_early_eviction": {
+      "zero_trades_hours": 48,
+      "near_dead_trades": 1,
+      "near_dead_hours": 72,
+      "min_win_rate_n": 5,
+      "min_win_rate_floor": 0.20,
+      "max_divergence": 0.70,
+      "max_loss_pct": -5.0
+    },
+    "graduation_gates": {
+      "min_win_rate": 0.35,
+      "min_favorable_sharpe": 0.30,
+      "min_risk_reward_ratio": 0.80,
+      "max_consecutive_losses": 4,
+      "max_divergence": 0.50,
+      "min_trades": {
+        "5m": 20,
+        "15m": 15,
+        "1h": 10,
+        "4h": 5
+      }
+    },
+    "eviction_weights": {
+      "trial_base": 100,
+      "dead_bot_bonus": 50,
+      "low_win_rate_bonus": 30,
+      "high_divergence_bonus": 20,
+      "expired_per_day": 10,
+      "promising_protection": -20,
+      "near_graduation_protection": -30,
+      "graduated_base": 0,
+      "degrading_win_rate": 30,
+      "degrading_divergence": 20,
+      "anti_regime": 40,
+      "regime_fault_paused": 50,
+      "diversity_protection": -30,
+      "strong_performer_protection": -20,
+      "tenure_protection": -10
+    },
+    "replacement_sharpe_threshold": 0.20,
+    "max_per_group": 4,
+    "group_balance": {
+      "trend": { "target": 3, "min": 1 },
+      "range": { "target": 3, "min": 1 },
+      "vol":   { "target": 2, "min": 1 },
+      "carry": { "target": 1, "min": 0 }
+    },
+    "candidate_quality_multipliers": {
+      "kata_graduated": 1.5,
+      "qualifier": 1.2,
+      "untested": 1.0
+    }
   },
 
   "CIRCUIT_BREAKER": {
