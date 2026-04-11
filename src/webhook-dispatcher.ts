@@ -32,6 +32,20 @@ export interface TradeEvent {
   profit_pct?: number;
   exit_reason?: string;
   holding_minutes?: number;
+
+  // Attribution enrichment (Finding 2). All optional so existing callers
+  // and existing webhook consumers stay compatible — enrichment is additive.
+  trade_id?: number | string;
+  regime_at_entry?: string | null;
+  regime_at_exit?: string | null;
+  conviction_at_entry?: number | null;
+  composite_at_entry?: number | null;
+  mae_pct?: number | null;
+  mfe_pct?: number | null;
+  archetype?: string | null;
+  timeframe?: string | null;
+  opened_at?: string | null;
+  closed_at?: string | null;
 }
 
 interface SourceFilter {
@@ -196,6 +210,22 @@ function buildPayload(
     return buildKatoshiPayload(webhook, trade, botStatus, deployment);
   }
 
+  // Volume-weighted stake suggestion (Finding 13). Monitor stamps
+  // `effective_stake_pct` on the deployment record at activation time
+  // using `base_stake_pct * (volume_weight / portfolio_avg_volume_weight)`
+  // clamped to [floor, ceiling]. Fall back to the deployment's base or
+  // the 5% portfolio default so existing consumers always see a number.
+  const suggestedStakePct =
+    (typeof deployment?.effective_stake_pct === 'number'
+      ? deployment.effective_stake_pct
+      : typeof deployment?.base_stake_pct === 'number'
+        ? deployment.base_stake_pct
+        : 5);
+  const volumeWeight =
+    typeof deployment?.volume_weight === 'number'
+      ? deployment.volume_weight
+      : null;
+
   // Standard format
   const payload: Record<string, unknown> = {
     event_id: `evt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
@@ -208,6 +238,8 @@ function buildPayload(
       exchange: 'binance',
       timeframe: botStatus.timeframe,
       strategy: botStatus.strategy,
+      suggested_stake_pct: suggestedStakePct,
+      volume_weight: volumeWeight,
       ...(trade.is_exit
         ? {
             exit_price: trade.close_rate,
@@ -230,12 +262,25 @@ function buildPayload(
   if (webhook.transform?.include_regime_context && marketPrior) {
     const pairBase = trade.pair.split('/')[0];
     const regimeData = marketPrior.regimes?.[pairBase]?.['H2_SHORT'];
+    // Prefer the enrichment captured at the trade's actual entry; fall back
+    // to current market-prior and then deployment-level last_regime.
     payload.context = {
-      regime: regimeData?.regime || deployment?.last_regime || 'UNKNOWN',
-      conviction: regimeData?.conviction || deployment?.last_conviction || 0,
-      composite_score: deployment?.last_composite || 0,
+      regime:
+        trade.regime_at_entry ||
+        regimeData?.regime ||
+        deployment?.last_regime ||
+        'UNKNOWN',
+      regime_at_entry: trade.regime_at_entry ?? null,
+      regime_at_exit: trade.regime_at_exit ?? null,
+      conviction:
+        trade.conviction_at_entry ??
+        regimeData?.conviction ??
+        deployment?.last_conviction ??
+        0,
+      composite_score:
+        trade.composite_at_entry ?? deployment?.last_composite ?? 0,
       direction: regimeData?.direction || 'NEUTRAL',
-      archetype: deployment?.archetype || 'UNKNOWN',
+      archetype: trade.archetype || deployment?.archetype || 'UNKNOWN',
     };
   }
 
@@ -247,6 +292,10 @@ function buildPayload(
       paper_max_dd_pct: deployment?.max_dd_since_deploy || 0,
       wf_sharpe: deployment?.wfo_sharpe || null,
       wf_sortino: deployment?.wfo_sortino || null,
+      // Per-trade attribution (Finding 2) — null when data is unavailable.
+      mae_pct: trade.mae_pct ?? null,
+      mfe_pct: trade.mfe_pct ?? null,
+      holding_minutes: trade.holding_minutes ?? null,
     };
   }
 
@@ -389,17 +438,38 @@ async function deliverWebhook(
 // ─── Signal gating by campaign state ─────────────────────────────────
 
 /**
- * Only graduated campaigns (proven or published) should fire webhooks.
- * Warm-up bots trade internally — FreqTrade tracks P&L but no external signals.
+ * Only fully-graduated campaigns fire external webhooks.
+ *
+ * Graduation is a two-stage bridge:
+ *   1. `graduated_internal_only` — strategy passes warm-up gates, but signals
+ *      fire to the internal sink only (no customer webhooks). Gives us a
+ *      bake-in window to catch live-only bugs before exposing subscribers.
+ *   2. `graduated_external` — after the bridge window, monitor promotes the
+ *      campaign. External webhooks start firing.
+ *
+ * The legacy `graduated` state is treated as `graduated_external` for
+ * backwards compatibility with existing campaigns.state values.
  */
 export function shouldFireWebhook(
   campaign: { state: string } | null | undefined,
 ): boolean {
-  return campaign?.state === 'graduated';
+  const state = campaign?.state;
+  return state === 'graduated_external' || state === 'graduated';
 }
 
 /**
- * Only graduated campaigns with live Sharpe >= 0.8 publish to marketplace.
+ * Internal-only graduation: signals flow to the internal event sink
+ * (aphexDATA, console-sync) but NOT to external customer webhooks.
+ * Used by the bridge period post-graduation.
+ */
+export function isGraduatedInternalOnly(
+  campaign: { state: string } | null | undefined,
+): boolean {
+  return campaign?.state === 'graduated_internal_only';
+}
+
+/**
+ * Only fully-graduated campaigns with live Sharpe >= 0.8 publish to marketplace.
  * Below 0.8 = personal webhooks only. Above 0.8 = marketplace + personal.
  */
 export function shouldPublishToMarketplace(
@@ -408,9 +478,11 @@ export function shouldPublishToMarketplace(
     | null
     | undefined,
 ): boolean {
+  const state = campaign?.state;
+  const fullyGraduated = state === 'graduated_external' || state === 'graduated';
   return (
-    campaign?.state === 'graduated' &&
-    (campaign.graduation?.live_sharpe ?? 0) >= 0.8
+    fullyGraduated &&
+    (campaign?.graduation?.live_sharpe ?? 0) >= 0.8
   );
 }
 

@@ -42,7 +42,7 @@ function tradesToDailyReturns(
   trades: Array<{
     profit_ratio?: number;
     open_date?: string;
-    close_date?: string;
+    close_date?: string | null;
   }>,
 ): number[] {
   const byDay = new Map<number, number>();
@@ -82,7 +82,7 @@ export function computeTradeSharpe(
   trades: Array<{
     profit_ratio?: number;
     open_date?: string;
-    close_date?: string;
+    close_date?: string | null;
   }>,
 ): number {
   if (!trades || trades.length < 2) return 0;
@@ -104,6 +104,144 @@ export function computeTradeSharpe(
 }
 
 /**
+ * Finding 1 — Regime-conditional P&L rollup.
+ *
+ * Aggregates Finding 2's per-trade enrichment into a `{regime: metrics}`
+ * map so monitor, dashboard, and kata can reason about *where* a strategy
+ * wins and loses instead of only the integrated Sharpe.
+ *
+ * Input: enriched trades with `regime_at_entry` set (null entries are
+ * bucketed under `UNKNOWN` — expected during bot warm-up before the first
+ * market-prior tick).
+ *
+ * Output keys are regimes (`EFFICIENT_TREND`, `COMPRESSION`, `CHAOS`,
+ * `TRANQUIL`, `UNKNOWN`); per-regime metrics are:
+ *   - `n_trades` — closed-trade count in this regime
+ *   - `pnl_pct` — sum of profit_pct (cumulative, additive)
+ *   - `win_rate` — wins / closed in this regime (0–100)
+ *   - `sharpe` — annualized daily Sharpe computed on the regime's own
+ *     daily-bucketed return series (reuses `computeTradeSharpe` so the
+ *     numerical convention matches integrated Sharpe)
+ *   - `avg_mae_pct` / `avg_mfe_pct` — mean of the MAE/MFE columns for
+ *     closed trades; null when no trade in the regime had the field
+ *   - `first_seen` / `last_seen` — ISO timestamps of the first and last
+ *     closed trade in the regime (useful for freshness gates)
+ *
+ * Only closed trades contribute (unresolved `profit_ratio === null`
+ * trades are ignored). Regimes with zero closed trades are omitted so
+ * the output stays compact.
+ */
+export interface RegimeMetrics {
+  n_trades: number;
+  pnl_pct: number;
+  win_rate: number;
+  sharpe: number;
+  avg_mae_pct: number | null;
+  avg_mfe_pct: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
+export type ByRegime = Record<string, RegimeMetrics>;
+
+interface EnrichedTradeLike {
+  profit_ratio?: number | null;
+  profit_pct?: number | null;
+  open_date?: string | null;
+  close_date?: string | null;
+  closed_at?: string | null;
+  opened_at?: string | null;
+  regime_at_entry?: string | null;
+  mae_pct?: number | null;
+  mfe_pct?: number | null;
+}
+
+export function computeByRegime(trades: EnrichedTradeLike[]): ByRegime {
+  if (!trades || trades.length === 0) return {};
+
+  const buckets = new Map<string, EnrichedTradeLike[]>();
+  for (const t of trades) {
+    // Only closed trades contribute — unresolved profit_ratio means the
+    // trade is still open and has no attribution yet.
+    if (t.profit_ratio == null) continue;
+    const regime = t.regime_at_entry || 'UNKNOWN';
+    const list = buckets.get(regime);
+    if (list) list.push(t);
+    else buckets.set(regime, [t]);
+  }
+
+  const result: ByRegime = {};
+  for (const [regime, list] of buckets) {
+    if (list.length === 0) continue;
+
+    let pnlPct = 0;
+    let wins = 0;
+    let maeSum = 0;
+    let maeN = 0;
+    let mfeSum = 0;
+    let mfeN = 0;
+    let firstSeen: string | null = null;
+    let lastSeen: string | null = null;
+
+    // For Sharpe, reuse computeTradeSharpe on a synthetic trade list
+    // with the minimum fields it needs (profit_ratio + a date).
+    const sharpeInput: Array<{
+      profit_ratio?: number;
+      open_date?: string;
+      close_date?: string | null;
+    }> = [];
+
+    for (const t of list) {
+      const profitPct =
+        typeof t.profit_pct === 'number'
+          ? t.profit_pct
+          : (t.profit_ratio ?? 0) * 100;
+      pnlPct += profitPct;
+      if ((t.profit_ratio ?? 0) > 0) wins += 1;
+
+      if (typeof t.mae_pct === 'number') {
+        maeSum += t.mae_pct;
+        maeN += 1;
+      }
+      if (typeof t.mfe_pct === 'number') {
+        mfeSum += t.mfe_pct;
+        mfeN += 1;
+      }
+
+      const closeStr = t.close_date || t.closed_at || null;
+      const openStr = t.open_date || t.opened_at || null;
+      const stamp = closeStr || openStr;
+      if (stamp) {
+        if (!firstSeen || stamp < firstSeen) firstSeen = stamp;
+        if (!lastSeen || stamp > lastSeen) lastSeen = stamp;
+      }
+
+      sharpeInput.push({
+        profit_ratio: t.profit_ratio ?? 0,
+        open_date: openStr ?? undefined,
+        close_date: closeStr,
+      });
+    }
+
+    const sharpe = computeTradeSharpe(sharpeInput);
+    const winRate = (wins / list.length) * 100;
+
+    result[regime] = {
+      n_trades: list.length,
+      pnl_pct: Number(pnlPct.toFixed(4)),
+      win_rate: Number(winRate.toFixed(2)),
+      sharpe: Number(sharpe.toFixed(4)),
+      avg_mae_pct: maeN > 0 ? Number((maeSum / maeN).toFixed(4)) : null,
+      avg_mfe_pct: mfeN > 0 ? Number((mfeSum / mfeN).toFixed(4)) : null,
+      first_seen: firstSeen,
+      last_seen: lastSeen,
+    };
+  }
+
+  return result;
+}
+
+/**
  * Build a daily cumulative equity curve from FreqTrade trade objects.
  *
  * Returns an array of {date, cumulative_pnl_pct} points, one per UTC day
@@ -117,7 +255,7 @@ export function computeDailyEquityCurve(
   trades: Array<{
     profit_ratio?: number;
     open_date?: string;
-    close_date?: string;
+    close_date?: string | null;
   }>,
 ): Array<{ date: string; cumulative_pnl_pct: number }> {
   const byDay = new Map<number, number>();

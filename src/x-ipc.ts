@@ -9,7 +9,13 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+
+// Chrome path must come from .env — nanoclaw never loads secrets into
+// process.env, and the x-integration scripts default to a macOS path
+// that won't exist on Windows/Linux. Read once at module load.
+const { CHROME_PATH } = readEnvFile(['CHROME_PATH']);
 
 interface SkillResult {
   success: boolean;
@@ -30,7 +36,11 @@ function runScript(script: string, args: object): Promise<SkillResult> {
   return new Promise((resolve) => {
     const proc = spawn('npx', ['tsx', scriptPath], {
       cwd: process.cwd(),
-      env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
+      env: {
+        ...process.env,
+        NANOCLAW_ROOT: process.cwd(),
+        ...(CHROME_PATH ? { CHROME_PATH } : {}),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true,
     });

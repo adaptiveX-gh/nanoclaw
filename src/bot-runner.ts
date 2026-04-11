@@ -26,7 +26,19 @@ import http from 'http';
 import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
-import { computeTradeSharpe, computeDailyEquityCurve } from './sharpe.js';
+import {
+  computeTradeSharpe,
+  computeDailyEquityCurve,
+  computeByRegime,
+  type ByRegime,
+} from './sharpe.js';
+import {
+  enrichTrades,
+  stampOpenTrade,
+  dropDeployment as dropEnrichmentDeployment,
+  type EnrichedTrade,
+  type FtTradeLike,
+} from './trade-enrichment.js';
 import { dispatchSignal, type TradeEvent } from './webhook-dispatcher.js';
 
 // ─── Configuration ──────────────────────────────────────────────────
@@ -128,6 +140,15 @@ interface BotStatusFile {
     win_rate: number;
     sharpe: number;
     daily_equity?: Array<{ date: string; cumulative_pnl_pct: number }>;
+    // Rolling window of the most recent enriched trades for attribution
+    // downstream (Finding 2). Capped at 50 — enough for by_regime rollups
+    // without bloating the status file. Unused by existing consumers.
+    enriched_trades?: EnrichedTrade[];
+    // Finding 1 — regime-conditional P&L rollup derived from enriched_trades.
+    // Keyed by regime string (EFFICIENT_TREND, COMPRESSION, CHAOS, TRANQUIL,
+    // UNKNOWN). Consumers: monitor (regime-aware retirement), dashboard
+    // (regime P&L tab), kata (regime-conditional optimization targets).
+    by_regime?: ByRegime;
     last_updated: string;
   };
 }
@@ -728,6 +749,9 @@ async function stopBotContainer(deploymentId: string): Promise<void> {
   bot.signalsActive = false;
   writeBotStatus(bot);
   activeBots.delete(deploymentId);
+  // Finding 2: drop the trade-enrichment store slice so it doesn't
+  // accumulate dead entries across retirements.
+  dropEnrichmentDeployment(deploymentId);
 }
 
 async function toggleBotSignals(
@@ -798,6 +822,8 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
       let dailyEquity:
         | Array<{ date: string; cumulative_pnl_pct: number }>
         | undefined = prevPnl?.daily_equity;
+      let enrichedTrades: EnrichedTrade[] | undefined =
+        prevPnl?.enriched_trades;
       try {
         const tradesRes = await ftApiCall(
           bot.port,
@@ -807,15 +833,75 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
         );
         if (tradesRes.status === 200) {
           const tradesData = JSON.parse(tradesRes.body);
-          const tradeList = tradesData.trades || [];
+          const tradeList: FtTradeLike[] = tradesData.trades || [];
           sharpe = computeTradeSharpe(tradeList);
           dailyEquity = computeDailyEquityCurve(tradeList);
+
+          // Finding 2: enrich every trade with regime/MAE/MFE/attribution
+          // context. Store the most recent 50 in the status file for
+          // downstream by_regime aggregation (Finding 1) and dashboard display.
+          try {
+            const deployment = readDeployment(bot.deploymentId);
+            const marketPrior = readMarketPrior();
+            const enriched = enrichTrades(
+              bot.deploymentId,
+              tradeList,
+              marketPrior,
+              deployment,
+              deployment?.archetype ?? null,
+              bot.timeframe ?? null,
+            );
+            enrichedTrades = enriched.slice(-50);
+          } catch (enrichErr) {
+            logger.debug(
+              {
+                deploymentId: bot.deploymentId,
+                err:
+                  enrichErr instanceof Error
+                    ? enrichErr.message
+                    : String(enrichErr),
+              },
+              'Trade enrichment failed — falling back to previous',
+            );
+          }
         } else {
           sharpe = prevPnl?.sharpe ?? 0;
         }
       } catch {
         sharpe = prevPnl?.sharpe ?? 0;
       }
+
+      // Finding 2: open-trade scanner — stamp any fresh open trades with
+      // entry-time regime context so regime_at_entry is accurate by the time
+      // the close arrives. Non-blocking and best-effort.
+      try {
+        const statusRes = await ftApiCall(
+          bot.port,
+          'GET',
+          'status',
+          bot.password,
+        );
+        if (statusRes.status === 200) {
+          const openTrades = JSON.parse(statusRes.body);
+          if (Array.isArray(openTrades) && openTrades.length > 0) {
+            const deployment = readDeployment(bot.deploymentId);
+            const marketPrior = readMarketPrior();
+            for (const ot of openTrades as FtTradeLike[]) {
+              stampOpenTrade(bot.deploymentId, ot, marketPrior, deployment);
+            }
+          }
+        }
+      } catch {
+        // Non-critical — enrichment degrades gracefully to close-time snapshot
+      }
+
+      // Finding 1 — roll enriched trades into regime-conditional metrics.
+      // Runs only when we have enriched_trades (post-warm-up) and silently
+      // omits the field otherwise so existing consumers aren't broken.
+      const byRegime =
+        enrichedTrades && enrichedTrades.length > 0
+          ? computeByRegime(enrichedTrades)
+          : undefined;
 
       pnl = {
         profit_pct: profit.profit_all_percent || 0,
@@ -826,6 +912,12 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
         sharpe,
         ...(dailyEquity && dailyEquity.length > 0
           ? { daily_equity: dailyEquity }
+          : {}),
+        ...(enrichedTrades && enrichedTrades.length > 0
+          ? { enriched_trades: enrichedTrades }
+          : {}),
+        ...(byRegime && Object.keys(byRegime).length > 0
+          ? { by_regime: byRegime }
           : {}),
         last_updated: new Date().toISOString(),
       };
@@ -956,6 +1048,12 @@ async function postTradeEvent(
   const pairBase = (status.pair || '').split('/')[0];
   const regimeData = marketPrior?.regimes?.[pairBase]?.['H2_SHORT'];
 
+  // Finding 2: pull the most recent enriched trade for attribution context.
+  // The enriched_trades array in paper_pnl is populated by getBotStatus and
+  // carries per-trade regime@entry, MAE, MFE, holding minutes etc.
+  const enrichedList = status.paper_pnl?.enriched_trades || [];
+  const lastEnriched = enrichedList[enrichedList.length - 1];
+
   const body = {
     agent_id: agentId || undefined,
     verb_id: 'trade_detected',
@@ -976,6 +1074,22 @@ async function postTradeEvent(
       regime_conviction:
         regimeData?.conviction || deployment?.last_conviction || null,
       archetype: deployment?.archetype || null,
+      // Per-trade attribution (Finding 2) — null when no enriched trade is
+      // available yet (first few health checks after deploy).
+      last_trade: lastEnriched
+        ? {
+            trade_id: lastEnriched.trade_id,
+            regime_at_entry: lastEnriched.regime_at_entry,
+            regime_at_exit: lastEnriched.regime_at_exit,
+            conviction_at_entry: lastEnriched.conviction_at_entry,
+            composite_at_entry: lastEnriched.composite_at_entry,
+            mae_pct: lastEnriched.mae_pct,
+            mfe_pct: lastEnriched.mfe_pct,
+            holding_minutes: lastEnriched.holding_minutes,
+            profit_pct: lastEnriched.profit_pct,
+            exit_reason: lastEnriched.exit_reason,
+          }
+        : null,
     },
     context: {
       source: 'bot_runner',
@@ -1393,8 +1507,21 @@ async function healthCheckBots(): Promise<void> {
               const tradesData = JSON.parse(tradesRes.body);
               const deployment = readDeployment(deploymentId);
               const marketPrior = readMarketPrior();
+              // Finding 2: enrich each closed trade with full attribution
+              // context before dispatch. enrichTrades hydrates regime_at_entry
+              // from the stamped entry snapshot when available.
+              const enriched = enrichTrades(
+                deploymentId,
+                (tradesData.trades || []) as FtTradeLike[],
+                marketPrior,
+                deployment,
+                deployment?.archetype ?? null,
+                status.timeframe ?? null,
+              );
 
-              for (const trade of tradesData.trades || []) {
+              for (let i = 0; i < (tradesData.trades || []).length; i++) {
+                const trade = tradesData.trades[i];
+                const enr = enriched[i];
                 const tradeEvent: TradeEvent = {
                   pair: trade.pair,
                   is_short: trade.is_short || false,
@@ -1404,6 +1531,17 @@ async function healthCheckBots(): Promise<void> {
                   profit_pct: trade.profit_pct,
                   exit_reason: trade.exit_reason,
                   holding_minutes: trade.trade_duration,
+                  trade_id: enr.trade_id,
+                  regime_at_entry: enr.regime_at_entry,
+                  regime_at_exit: enr.regime_at_exit,
+                  conviction_at_entry: enr.conviction_at_entry,
+                  composite_at_entry: enr.composite_at_entry,
+                  mae_pct: enr.mae_pct,
+                  mfe_pct: enr.mfe_pct,
+                  archetype: enr.archetype,
+                  timeframe: enr.timeframe,
+                  opened_at: enr.opened_at,
+                  closed_at: enr.closed_at,
                 };
                 await dispatchSignal(
                   tradeEvent,

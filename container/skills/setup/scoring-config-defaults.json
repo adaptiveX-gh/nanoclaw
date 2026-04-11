@@ -37,6 +37,13 @@
     "scaling_factor": 0.6
   },
 
+  "DIVERGENCE_GATE": {
+    "enabled": true,
+    "min_trades": 10,
+    "route_threshold": 0.30,
+    "pause_threshold": 0.70
+  },
+
   "RETIREMENT_GATES": {
     "catastrophic_dd_multiplier": 1.5,
     "catastrophic_dd_multiplier_high_regime_dep": 1.0,
@@ -76,6 +83,9 @@
     "EDGE_BONUS_HIGH": 2.0,
     "EDGE_BONUS_MID": 1.0,
     "DEPLOYMENT_FAILURE_PENALTY": -3.0,
+    "DEPLOYMENT_FAILURE_BLACKLIST_THRESHOLD": 3,
+    "DEPLOYMENT_FAILURE_BLACKLIST_SCORE": -10.0,
+    "DEPLOYMENT_FAILURE_LOOKBACK_DAYS": 14,
     "DEPLOYMENT_CHURN_PENALTY_PER_CYCLE": -1.0,
     "DEPLOYMENT_CHURN_CAP": -5.0,
     "PERSISTENCE_BONUS_PER_SNAPSHOT": 0.5,
@@ -109,6 +119,14 @@
 
   "VOLUME_WEIGHT": {
     "normalization": "max_liquidity_percentile"
+  },
+
+  "VOLUME_WEIGHTED_STAKE": {
+    "_comment": "Finding 13 — scale deployment stake by liquidity. effective_stake_pct = clamp(base_stake_pct * (volume_weight / portfolio_avg_volume_weight), base*floor, base*ceiling). Disabled → use base_stake_pct flat.",
+    "enabled": true,
+    "floor_multiplier": 0.4,
+    "ceiling_multiplier": 1.5,
+    "default_portfolio_avg_volume_weight": 0.65
   },
 
   "TREND_BOOST": {
