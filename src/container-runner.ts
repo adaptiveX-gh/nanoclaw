@@ -319,6 +319,8 @@ function buildContainerArgs(
     'SUPABASE_USER_ID',
     'ORDERFLOW_API_URL',
     'GITHUB_TOKEN',
+    'TV_WEBHOOK_SECRET',
+    'TV_MANUAL_BOT_URL',
   ];
   const envValues = readEnvFile(allEnvKeys);
 
@@ -365,6 +367,12 @@ function buildContainerArgs(
   // Forward Orderflow API URL (no auth needed, public API)
   const ofUrl = envVal('ORDERFLOW_API_URL');
   if (ofUrl) args.push('-e', `ORDERFLOW_API_URL=${ofUrl}`);
+
+  // TV Signals (TradingView webhook processing)
+  for (const tvKey of ['TV_WEBHOOK_SECRET', 'TV_MANUAL_BOT_URL']) {
+    const val = envVal(tvKey);
+    if (val) args.push('-e', `${tvKey}=${val}`);
+  }
 
   // Raise the per-response output token ceiling above the SDK default (32K).
   // Long session-resume catch-ups (accumulated monitor ticks, research cycles)
