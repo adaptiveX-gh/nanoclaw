@@ -228,5 +228,20 @@
     "rising_boost": 0.2,
     "falling_threshold": -0.3,
     "falling_penalty": -0.1
+  },
+
+  "REGIME_MODEL": {
+    "_comment": "HMM + BOCPD probabilistic regime engine (Phase A: HMM posteriors). shadow_mode=true means posteriors are computed and written to market-prior.json v2 but do NOT affect regime_fit or signal hysteresis. Flip to false after validation (Phase C). staleness_ll_threshold: if model log-likelihood per bar drops below this, flag model as stale for retraining.",
+    "shadow_mode": true,
+    "n_states": 4,
+    "covariance_type": "full",
+    "n_iter": 100,
+    "hazard_rate": 0.02,
+    "posterior_min_for_preferred": 0.50,
+    "change_prob_caution_threshold": 0.30,
+    "staleness_ll_threshold": -2.0,
+    "retrain_interval_days": 30,
+    "lookback_bars_training": 2000,
+    "lookback_bars_inference": 100
   }
 }
