@@ -106,7 +106,7 @@ export interface EnrichedTrade {
   timeframe: string | null;
 
   // Execution realism (Finding 12)
-  slippage_estimate_pct: number | null;  // DEPRECATED — use slippage_pct
+  slippage_estimate_pct: number | null; // DEPRECATED — use slippage_pct
   slippage_pct: number | null;
   slippage_source: 'measured' | 'estimate' | 'shortfall' | null;
 }
@@ -310,19 +310,27 @@ export function computeSlippageEstimate(
 export function computeSlippageMeasured(trade: FtTradeLike): number | null {
   const openReq = trade.open_rate_requested;
   const openFill = trade.open_rate;
-  if (typeof openReq !== 'number' || openReq <= 0 ||
-      typeof openFill !== 'number' || openFill <= 0) {
+  if (
+    typeof openReq !== 'number' ||
+    openReq <= 0 ||
+    typeof openFill !== 'number' ||
+    openFill <= 0
+  ) {
     return null;
   }
 
-  const entrySlip = Math.abs(openFill - openReq) / openReq * 100;
+  const entrySlip = (Math.abs(openFill - openReq) / openReq) * 100;
 
   let exitSlip = 0;
   const closeReq = trade.close_rate_requested;
   const closeFill = trade.close_rate;
-  if (typeof closeReq === 'number' && closeReq > 0 &&
-      typeof closeFill === 'number' && closeFill > 0) {
-    exitSlip = Math.abs(closeFill - closeReq) / closeReq * 100;
+  if (
+    typeof closeReq === 'number' &&
+    closeReq > 0 &&
+    typeof closeFill === 'number' &&
+    closeFill > 0
+  ) {
+    exitSlip = (Math.abs(closeFill - closeReq) / closeReq) * 100;
   }
 
   return entrySlip + exitSlip;
@@ -346,11 +354,15 @@ export function computeSlippageShortfall(
   trade: FtTradeLike,
   signalClose: number | null | undefined,
 ): number | null {
-  if (typeof signalClose !== 'number' || signalClose <= 0 ||
-      typeof trade.open_rate !== 'number' || trade.open_rate <= 0) {
+  if (
+    typeof signalClose !== 'number' ||
+    signalClose <= 0 ||
+    typeof trade.open_rate !== 'number' ||
+    trade.open_rate <= 0
+  ) {
     return null;
   }
-  return Math.abs(trade.open_rate - signalClose) / signalClose * 100;
+  return (Math.abs(trade.open_rate - signalClose) / signalClose) * 100;
 }
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -459,12 +471,15 @@ export function enrichTrade(
       const estimated = computeSlippageEstimate(deployment, null);
       const pct = shortfall ?? measured ?? estimated;
       const source: EnrichedTrade['slippage_source'] =
-        shortfall != null ? 'shortfall'
-        : measured != null ? 'measured'
-        : estimated != null ? 'estimate'
-        : null;
+        shortfall != null
+          ? 'shortfall'
+          : measured != null
+            ? 'measured'
+            : estimated != null
+              ? 'estimate'
+              : null;
       return {
-        slippage_estimate_pct: pct,  // deprecated alias
+        slippage_estimate_pct: pct, // deprecated alias
         slippage_pct: pct,
         slippage_source: source,
       };
@@ -492,11 +507,18 @@ export function enrichTrades(
   signalCloseMap?: Map<number | string, number>,
 ): EnrichedTrade[] {
   return trades.map((t) => {
-    const sc = signalCloseMap && t.trade_id != null
-      ? signalCloseMap.get(t.trade_id) ?? null
-      : null;
+    const sc =
+      signalCloseMap && t.trade_id != null
+        ? (signalCloseMap.get(t.trade_id) ?? null)
+        : null;
     return enrichTrade(
-      deploymentId, t, marketPrior, deployment, archetype, timeframe, sc,
+      deploymentId,
+      t,
+      marketPrior,
+      deployment,
+      archetype,
+      timeframe,
+      sc,
     );
   });
 }

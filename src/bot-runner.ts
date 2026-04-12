@@ -461,7 +461,9 @@ async function fetchSignalClose(
       const sc = data?.custom_data?.signal_close?.value;
       return typeof sc === 'number' && sc > 0 ? sc : null;
     }
-  } catch { /* non-critical — falls through to measured > estimated */ }
+  } catch {
+    /* non-critical — falls through to measured > estimated */
+  }
   return null;
 }
 
@@ -1561,7 +1563,9 @@ async function healthCheckBots(): Promise<void> {
               for (const nt of newTrades) {
                 if (typeof nt.trade_id === 'number') {
                   const sc = await fetchSignalClose(
-                    bot.port, bot.password, nt.trade_id,
+                    bot.port,
+                    bot.password,
+                    nt.trade_id,
                   );
                   if (sc != null) signalCloseMap.set(nt.trade_id, sc);
                 }
