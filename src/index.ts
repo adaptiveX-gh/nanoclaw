@@ -50,6 +50,7 @@ import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startBotRunner } from './bot-runner.js';
 import { startConsoleSync } from './console-sync.js';
+import { startTvWebhook } from './tv-webhook.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -659,6 +660,18 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
   });
   startConsoleSync(getDb(), DATA_DIR);
+  startTvWebhook({
+    sendMessage: async (jid, rawText) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'TV webhook: no channel owns JID');
+        return;
+      }
+      const text = formatOutbound(rawText);
+      if (text) await channel.sendMessage(jid, text);
+    },
+    registeredGroups: () => registeredGroups,
+  });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
