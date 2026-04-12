@@ -53,9 +53,9 @@ export interface RegimeSnapshot {
   direction: string | null;
   recorded_at: string;
   // Phase C: probabilistic regime data (market-prior.json v2)
-  posterior: Record<string, number> | null;  // {EFFICIENT_TREND: 0.68, ...}
-  change_prob: number | null;               // BOCPD P(changepoint)
-  expected_run_length: number | null;        // BOCPD expected run length
+  posterior: Record<string, number> | null; // {EFFICIENT_TREND: 0.68, ...}
+  change_prob: number | null; // BOCPD P(changepoint)
+  expected_run_length: number | null; // BOCPD expected run length
 }
 
 /**

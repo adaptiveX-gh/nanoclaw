@@ -206,6 +206,24 @@ function readMarketPrior(): any | null {
   return null;
 }
 
+function readPortfolio(): any | null {
+  try {
+    for (const folder of fs.readdirSync(GROUPS_DIR)) {
+      const pfFile = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'portfolio.json',
+      );
+      if (!fs.existsSync(pfFile)) continue;
+      return JSON.parse(fs.readFileSync(pfFile, 'utf-8'));
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 // ─── State ──────────────────────────────────────────────────────────
 
 const activeBots = new Map<string, BotInstance>();
@@ -1554,6 +1572,7 @@ async function healthCheckBots(): Promise<void> {
               const tradesData = JSON.parse(tradesRes.body);
               const deployment = readDeployment(deploymentId);
               const marketPrior = readMarketPrior();
+              const portfolio = readPortfolio();
 
               // Track B: fetch signal_close custom_data for new trades.
               // Only 1-2 trades per cycle — individual /trade/<id> calls
@@ -1616,6 +1635,8 @@ async function healthCheckBots(): Promise<void> {
                   deployment,
                   marketPrior,
                   process.env as Record<string, string>,
+                  undefined,
+                  portfolio,
                 );
               }
             }

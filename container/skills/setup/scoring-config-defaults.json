@@ -243,5 +243,59 @@
     "retrain_interval_days": 30,
     "lookback_bars_training": 2000,
     "lookback_bars_inference": 100
+  },
+
+  "TV_SIGNALS": {
+    "_comment": "TradingView inbound signal validation. Rules are composable — each rule is independently enabled per source. default_signal_rules is the set applied when a source doesn't specify its own. chart_vision and technical_analysis are opt-in (slow, ~10-15s each). TV trades run on a dedicated manual-trade bot, separate from the 10-bot slot cap.",
+    "enabled": true,
+    "default_signal_rules": ["dedup", "regime_check", "rate_limit", "portfolio_exposure"],
+    "dedup_window_seconds": 300,
+    "rate_limit_per_hour": 10,
+    "rate_limit_per_source_per_hour": 5,
+    "regime_check": {
+      "block_anti_regime": true,
+      "block_chaos_min_conviction": 60,
+      "min_conviction": 40
+    },
+    "chart_vision": {
+      "require_directional_alignment": true,
+      "min_confidence": "medium"
+    },
+    "technical_analysis": {
+      "require_directional_alignment": true,
+      "min_confluence_count": 2
+    },
+    "portfolio_exposure": {
+      "max_open_tv_trades": 5,
+      "max_tv_capital_pct": 25,
+      "max_per_pair_tv_trades": 2
+    },
+    "sizing": {
+      "default_stake_pct": 5.0,
+      "min_stake_pct": 1.0,
+      "max_stake_pct": 10.0,
+      "apply_validation_sizing_modifier": true
+    },
+    "tracking": {
+      "auto_close_timeout_hours": 168,
+      "pnl_refresh_interval_minutes": 15
+    }
+  },
+
+  "TAIL_RISK": {
+    "_comment": "Portfolio CVaR (Expected Shortfall) engine. Computes daily tail risk and derives a continuous risk multiplier m ∈ [multiplier_min, multiplier_max]. shadow_mode=true means m is computed and logged but not applied to stake sizing. Circuit breaker takes precedence: if active, m=0 regardless. MCP tool writes shadow_mode into portfolio.json so consumers read from one place.",
+    "shadow_mode": true,
+    "alpha": 0.975,
+    "lookback_days": 365,
+    "estimator": "ew_hist",
+    "target_cvar_daily_pct": 1.5,
+    "multiplier_min": 0.25,
+    "multiplier_max": 1.0,
+    "smoothing_halflife_days": 7,
+    "min_hold_hours": 24,
+    "min_obs": 30,
+    "min_tail_obs": 3,
+    "risk_off_multiplier_threshold": 0.50,
+    "deploy_gate_multiplier_threshold": 0.60
   }
 }

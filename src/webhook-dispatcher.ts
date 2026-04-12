@@ -207,6 +207,7 @@ function buildPayload(
   botStatus: BotStatusFile,
   deployment: any | null,
   marketPrior: any | null,
+  portfolio?: any | null,
 ): object {
   const format = webhook.transform?.format || 'standard';
 
@@ -230,6 +231,24 @@ function buildPayload(
       ? deployment.volume_weight
       : null;
 
+  // Portfolio tail risk scaling (Finding 18). The MCP tool writes
+  // risk_scaling.multiplier and risk_scaling.shadow_mode to portfolio.json.
+  // When shadow_mode is false, scale suggested_stake_pct by the multiplier.
+  // Circuit breaker takes precedence: if active, m=0 regardless of CVaR.
+  const riskScaling = portfolio?.risk_scaling;
+  const circuitBreakerActive = portfolio?.circuit_breaker_active === true;
+  const tailRiskShadow = riskScaling?.shadow_mode !== false; // default true
+
+  const riskMultiplier: number = circuitBreakerActive
+    ? 0
+    : typeof riskScaling?.multiplier === 'number'
+      ? riskScaling.multiplier
+      : 1.0;
+
+  const suggestedStakePctScaled = tailRiskShadow
+    ? suggestedStakePct
+    : Math.max(0.5, suggestedStakePct * riskMultiplier);
+
   // Standard format
   const payload: Record<string, unknown> = {
     event_id: `evt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
@@ -242,7 +261,9 @@ function buildPayload(
       exchange: 'binance',
       timeframe: botStatus.timeframe,
       strategy: botStatus.strategy,
-      suggested_stake_pct: suggestedStakePct,
+      suggested_stake_pct: suggestedStakePctScaled,
+      suggested_stake_pct_raw: suggestedStakePct,
+      risk_multiplier: riskMultiplier,
       volume_weight: volumeWeight,
       ...(trade.is_exit
         ? {
@@ -290,18 +311,24 @@ function buildPayload(
     // Phase C: probabilistic regime data. Prefer entry-time snapshot from
     // enrichment; fall back to current market-prior v2 posterior + transition.
     const posterior =
-      trade.regime_posterior_at_entry ??
-      regimeData?.posterior ??
-      null;
+      trade.regime_posterior_at_entry ?? regimeData?.posterior ?? null;
     if (posterior && typeof posterior === 'object') {
       context.regime_posterior = posterior;
     }
     const changeProb =
-      trade.change_prob_at_entry ??
-      regimeData?.transition?.change_prob ??
-      null;
+      trade.change_prob_at_entry ?? regimeData?.transition?.change_prob ?? null;
     if (typeof changeProb === 'number') {
       context.change_prob = changeProb;
+    }
+
+    // Portfolio tail risk context (Finding 18)
+    if (portfolio?.tail_risk) {
+      context.portfolio_risk = {
+        multiplier: riskMultiplier,
+        cvar_daily_pct: portfolio.tail_risk.cvar_daily_pct ?? null,
+        confidence: portfolio.tail_risk.confidence ?? null,
+        alpha: portfolio.tail_risk.alpha ?? null,
+      };
     }
 
     payload.context = context;
@@ -519,6 +546,7 @@ export async function dispatchSignal(
     state: string;
     graduation?: { live_sharpe?: number | null };
   } | null,
+  portfolio?: any | null,
 ): Promise<DeliveryResult[]> {
   // Gate: only fire webhooks for graduated campaigns
   if (campaign && !shouldFireWebhook(campaign)) {
@@ -562,6 +590,7 @@ export async function dispatchSignal(
       botStatus,
       deployment,
       marketPrior,
+      portfolio,
     );
 
     // Deliver
