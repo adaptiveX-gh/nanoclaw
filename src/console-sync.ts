@@ -22,6 +22,31 @@ const MAX_RETRIES = 3;
 const CURSOR_FILE = 'console-sync/cursor.json';
 const USAGE_FETCH_EVERY_N_CYCLES = 60; // ~hourly (60 × 60s)
 const COMPOSITES_FILE = '.cell-grid-composites.json';
+
+// Canonical archetype names from archetypes.yaml.  The market-timing agent
+// sometimes shortens names (e.g. "CARRY" instead of "CARRY_FUNDING").
+// Normalize before pushing to Supabase so the frontend always finds them.
+const CANONICAL_ARCHETYPES = new Set([
+  'TREND_MOMENTUM', 'BREAKOUT', 'MEAN_REVERSION', 'RANGE_BOUND',
+  'SCALPING', 'VOLATILITY_HARVEST', 'CARRY_FUNDING',
+]);
+const ARCHETYPE_ALIASES: Record<string, string> = {
+  CARRY: 'CARRY_FUNDING',
+  RANGE: 'RANGE_BOUND',
+  MOMENTUM_DIVERGENCE: 'VOLATILITY_HARVEST',
+  MOMENTUM_BREAKOUT: 'BREAKOUT',
+  GRID: 'RANGE_BOUND',
+  TREND: 'TREND_MOMENTUM',
+  VOL_HARVEST: 'VOLATILITY_HARVEST',
+  VOLATILITY: 'VOLATILITY_HARVEST',
+  MEAN_REV: 'MEAN_REVERSION',
+  FUNDING: 'CARRY_FUNDING',
+};
+
+function normalizeArchetype(raw: string): string | null {
+  if (CANONICAL_ARCHETYPES.has(raw)) return raw;
+  return ARCHETYPE_ALIASES[raw] ?? null; // null = garbage, skip row
+}
 let syncCycleCount = 0;
 
 // Trend boost: track previous scoring cycle composites for delta computation
@@ -421,17 +446,34 @@ function loadResearchData(): {
         );
       }
 
-      // Merge trend_boost, gap_score, deployed_strategy, and scored_at → last_scored
-      const cellGrid = cellGridRaw.map((c: any) => {
-        const key = `${c.archetype}:${c.pair}:${c.timeframe}`;
-        return {
+      // Merge trend_boost, gap_score, deployed_strategy, and scored_at → last_scored.
+      // Normalize archetype names and drop garbage rows (strategy tags etc.).
+      const cellGrid: any[] = [];
+      let normalizedCount = 0;
+      let droppedCount = 0;
+      for (const c of cellGridRaw) {
+        const canonical = normalizeArchetype(c.archetype ?? '');
+        if (!canonical) {
+          droppedCount++;
+          continue;
+        }
+        if (canonical !== c.archetype) normalizedCount++;
+        const key = `${canonical}:${c.pair}:${c.timeframe}`;
+        cellGrid.push({
           ...c,
+          archetype: canonical,
           last_scored: c.scored_at ?? c.last_scored,
-          gap_score: gapScoreMap.get(key) ?? c.gap_score,
-          deployed_strategy: deployedMap.get(key) ?? c.deployed_strategy,
-          trend_boost: currentTrendBoosts.get(key) ?? 0.0,
-        };
-      });
+          gap_score: gapScoreMap.get(key) ?? gapScoreMap.get(`${c.archetype}:${c.pair}:${c.timeframe}`) ?? c.gap_score,
+          deployed_strategy: deployedMap.get(key) ?? deployedMap.get(`${c.archetype}:${c.pair}:${c.timeframe}`) ?? c.deployed_strategy,
+          trend_boost: currentTrendBoosts.get(key) ?? currentTrendBoosts.get(`${c.archetype}:${c.pair}:${c.timeframe}`) ?? 0.0,
+        });
+      }
+      if (normalizedCount > 0 || droppedCount > 0) {
+        logger.info(
+          { normalized: normalizedCount, dropped: droppedCount, total: cellGridRaw.length },
+          '[console-sync] Cell grid archetype cleanup',
+        );
+      }
 
       // Missed opportunities
       const missedFile = path.join(
