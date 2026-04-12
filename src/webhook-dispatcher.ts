@@ -46,6 +46,10 @@ export interface TradeEvent {
   timeframe?: string | null;
   opened_at?: string | null;
   closed_at?: string | null;
+
+  // Phase C: probabilistic regime attribution
+  regime_posterior_at_entry?: Record<string, number> | null;
+  change_prob_at_entry?: number | null;
 }
 
 interface SourceFilter {
@@ -264,7 +268,7 @@ function buildPayload(
     const regimeData = marketPrior.regimes?.[pairBase]?.['H2_SHORT'];
     // Prefer the enrichment captured at the trade's actual entry; fall back
     // to current market-prior and then deployment-level last_regime.
-    payload.context = {
+    const context: Record<string, unknown> = {
       regime:
         trade.regime_at_entry ||
         regimeData?.regime ||
@@ -282,6 +286,25 @@ function buildPayload(
       direction: regimeData?.direction || 'NEUTRAL',
       archetype: trade.archetype || deployment?.archetype || 'UNKNOWN',
     };
+
+    // Phase C: probabilistic regime data. Prefer entry-time snapshot from
+    // enrichment; fall back to current market-prior v2 posterior + transition.
+    const posterior =
+      trade.regime_posterior_at_entry ??
+      regimeData?.posterior ??
+      null;
+    if (posterior && typeof posterior === 'object') {
+      context.regime_posterior = posterior;
+    }
+    const changeProb =
+      trade.change_prob_at_entry ??
+      regimeData?.transition?.change_prob ??
+      null;
+    if (typeof changeProb === 'number') {
+      context.change_prob = changeProb;
+    }
+
+    payload.context = context;
   }
 
   if (webhook.transform?.include_paper_pnl && botStatus.paper_pnl) {

@@ -52,6 +52,10 @@ export interface RegimeSnapshot {
   composite: number | null;
   direction: string | null;
   recorded_at: string;
+  // Phase C: probabilistic regime data (market-prior.json v2)
+  posterior: Record<string, number> | null;  // {EFFICIENT_TREND: 0.68, ...}
+  change_prob: number | null;               // BOCPD P(changepoint)
+  expected_run_length: number | null;        // BOCPD expected run length
 }
 
 /**
@@ -104,6 +108,10 @@ export interface EnrichedTrade {
   mfe_pct: number | null;
   archetype: string | null;
   timeframe: string | null;
+
+  // Phase C: probabilistic regime attribution
+  regime_posterior_at_entry: Record<string, number> | null;
+  change_prob_at_entry: number | null;
 
   // Execution realism (Finding 12)
   slippage_estimate_pct: number | null; // DEPRECATED — use slippage_pct
@@ -187,6 +195,22 @@ export function snapshotRegime(
     marketPrior?.regimes?.[pairBase]?.['H1_MICRO'] ||
     null;
 
+  // Phase C: extract probabilistic posterior + transition from v2 market-prior
+  const posteriorRaw = regimeData?.posterior;
+  const posterior: Record<string, number> | null =
+    posteriorRaw && typeof posteriorRaw === 'object'
+      ? (posteriorRaw as Record<string, number>)
+      : null;
+  const transitionData = regimeData?.transition;
+  const changeProb: number | null =
+    typeof transitionData?.change_prob === 'number'
+      ? transitionData.change_prob
+      : null;
+  const expectedRunLength: number | null =
+    typeof transitionData?.expected_run_length === 'number'
+      ? transitionData.expected_run_length
+      : null;
+
   return {
     regime: regimeData?.regime || deployment?.last_regime || null,
     conviction:
@@ -199,6 +223,9 @@ export function snapshotRegime(
         : null,
     direction: regimeData?.direction || null,
     recorded_at: new Date().toISOString(),
+    posterior,
+    change_prob: changeProb,
+    expected_run_length: expectedRunLength,
   };
 }
 
@@ -439,6 +466,9 @@ export function enrichTrade(
         composite: stored.composite,
         direction: stored.direction,
         recorded_at: stored.recorded_at,
+        posterior: stored.posterior ?? null,
+        change_prob: stored.change_prob ?? null,
+        expected_run_length: stored.expected_run_length ?? null,
       }
     : exitSnap;
 
@@ -464,6 +494,9 @@ export function enrichTrade(
     mfe_pct: computeMfe(trade),
     archetype,
     timeframe,
+    // Phase C: probabilistic regime attribution at entry
+    regime_posterior_at_entry: entrySnap.posterior,
+    change_prob_at_entry: entrySnap.change_prob,
     // Three-tier fallback: shortfall > measured > estimated > null
     ...(() => {
       const shortfall = computeSlippageShortfall(trade, signalClose ?? null);
