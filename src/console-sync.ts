@@ -191,6 +191,10 @@ function loadDeployments(): any[] {
       try {
         const data = JSON.parse(fs.readFileSync(deploymentsFile, 'utf-8'));
         if (data.deployments) allDeployments.push(...data.deployments);
+        if (data.deployments_shadow_ungraduated)
+          allDeployments.push(...data.deployments_shadow_ungraduated);
+        if (data.deployments_active_untracked)
+          allDeployments.push(...data.deployments_active_untracked);
       } catch {
         // skip malformed files
       }
