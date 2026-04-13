@@ -161,12 +161,65 @@ After normalization, every TV signal becomes:
 cat {WORKSPACE}/auto-mode/tv-signals.json 2>/dev/null || echo '[]'
 cat {WORKSPACE}/auto-mode/market-prior.json 2>/dev/null || echo '{"regimes":{}}'
 cat {WORKSPACE}/scoring-config.json 2>/dev/null || echo '{}'
+ls {WORKSPACE}/auto-mode/tv-inbox/*.json 2>/dev/null
 ```
 
 Read `TV_SIGNALS` config from `scoring-config.json`, falling back to
 `scoring-config-defaults.json` for missing keys.
 
-### Step 1: Receive & Validate Sender
+### Step 0.5: Scan Inbox for Pending Signals
+
+Signals arrive via the **Supabase relay** (TradingView → Edge Function →
+Supabase → NanoClaw poller → local inbox files). The poller writes each
+signal to `{WORKSPACE}/auto-mode/tv-inbox/{signal_id}.json`.
+
+**When this skill is triggered** (by chat message, monitor tick, or any
+trigger phrase), scan the inbox directory:
+
+```bash
+ls {WORKSPACE}/auto-mode/tv-inbox/*.json 2>/dev/null
+```
+
+For each `.json` file found:
+
+1. Read the file. It contains:
+   ```json
+   {
+     "signal_id": "tvs_abc123",
+     "source_id": "buy-sell-signal",
+     "received_at": "2026-04-12T14:30:00Z",
+     "raw_payload": { "...original TV JSON..." }
+   }
+   ```
+
+2. Look up `source_id` in `tv-signals.json` to get the source config
+   (allowed_pairs, signal_rules, stake_pct, etc.).
+
+3. Verify `source.status == "active"` — if paused or disabled, skip the
+   file and log `reason: "source_not_active"`.
+
+4. **Immediately emit the `tv_signal_received` event** (Step 5d) so the
+   dashboard shows the signal right away — before running rules.
+
+5. Proceed to **Step 2 (Normalize)** with `raw_payload` as the TV payload.
+
+6. After processing (pass or fail), **delete the inbox file** to prevent
+   re-processing:
+   ```bash
+   rm {WORKSPACE}/auto-mode/tv-inbox/{signal_id}.json
+   ```
+
+**Important:** Sender validation (IP, secret, source existence) was already
+performed by the Supabase edge function (`tv-webhook`). The inbox file is
+pre-authenticated — skip Step 1 sender validation for inbox signals.
+
+If no inbox files exist, the skill can still be invoked for source
+management commands (list, register, update, delete, history).
+
+### Step 1: Receive & Validate Sender (webhook mode)
+
+> **Note:** This step applies only to direct webhook delivery. When
+> processing signals from the inbox (Step 0.5), skip to Step 2.
 
 The client provides an HTTP endpoint at `/api/webhooks/tv/{source_id}`. When a
 TradingView alert fires, it POSTs JSON to this URL.
@@ -484,21 +537,58 @@ when trades close on the manual bot.
 Post status updates at key moments:
 ```
 agent_post_status(
-  status: "TV SIGNAL validated: long BTC/USDT from Carlos TV — regime OK, chart confirms",
-  tags: ["tv_signal", "validated"]
+  status: "TV SIGNAL received: long BTC/USDT from Carlos TV",
+  tags: ["tv_signal", "received"]
 )
 ```
 
-Post at: signal received, validated, rejected (with reason), executed, trade closed.
+Post at: signal received, validated, rejected (with reason), executed.
 
-**5d. Audit trail:**
+**5d. Audit trail — granular verb_ids:**
+
+Log each stage with its own verb_id so the dashboard can filter and notify:
+
+On signal arrival:
 ```
 aphexdata_record_event(
-  verb_id: "tv_signal_processed",
+  verb_id: "tv_signal_received",
   verb_category: "execution",
-  object_type: "tv_signal",
+  object_type: "signal",
   object_id: signal_id,
-  result_data: { source_id, pair, direction, rules_passed, executed, sizing }
+  result_data: { source_id, pair, direction, price, timeframe }
+)
+```
+
+After rule validation passes:
+```
+aphexdata_record_event(
+  verb_id: "tv_signal_validated",
+  verb_category: "execution",
+  object_type: "signal",
+  object_id: signal_id,
+  result_data: { source_id, pair, direction, rules_passed, sizing_modifier }
+)
+```
+
+After rule validation fails:
+```
+aphexdata_record_event(
+  verb_id: "tv_signal_rejected",
+  verb_category: "execution",
+  object_type: "signal",
+  object_id: signal_id,
+  result_data: { source_id, pair, direction, failed_rules, reasons }
+)
+```
+
+After trade execution on manual bot:
+```
+aphexdata_record_event(
+  verb_id: "tv_signal_executed",
+  verb_category: "execution",
+  object_type: "trade",
+  object_id: signal_id,
+  result_data: { source_id, pair, direction, stake_pct, execution_price, trade_id }
 )
 ```
 

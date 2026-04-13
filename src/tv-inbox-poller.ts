@@ -152,9 +152,9 @@ async function pollInbox(
       writeSignalToLocalInbox(main.folder, signal);
       ackIds.push(signal.id);
 
-      // Notify main group
+      // Notify main group — message triggers tv-signals skill
       const summary = summarizeSignal(signal.raw_payload);
-      const text = `[TV Signal] ${summary} from "${signal.source_id}" (${signal.signal_id})\nProcess via tv-signals skill.`;
+      const text = `[TV Signal] ${summary} from "${signal.source_id}" (${signal.signal_id})\nInbound signal waiting in auto-mode/tv-inbox/${signal.signal_id}.json — process it now using the tv-signals skill (read the inbox file, normalize, run signal rules, execute if validated).`;
       deps.sendMessage(main.jid, text).catch((err) => {
         logger.error(
           { err, signalId: signal.signal_id },
