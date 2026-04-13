@@ -175,6 +175,33 @@ function loadBotStatuses(dataDir: string): any[] {
     .filter(Boolean);
 }
 
+function loadTvSignalSources(): any[] {
+  // TV signal sources live under groups/<folder>/auto-mode/tv-signals.json
+  const allSources: any[] = [];
+  try {
+    if (!fs.existsSync(GROUPS_DIR)) return [];
+    for (const folder of fs.readdirSync(GROUPS_DIR)) {
+      const tvFile = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'tv-signals.json',
+      );
+      if (!fs.existsSync(tvFile)) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(tvFile, 'utf-8'));
+        const sources = Array.isArray(data) ? data : [];
+        allSources.push(...sources);
+      } catch {
+        /* ignore parse errors */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return allSources;
+}
+
 function loadDeployments(): any[] {
   // Deployments live under groups/<folder>/auto-mode/deployments.json
   const allDeployments: any[] = [];
@@ -619,6 +646,7 @@ export async function runConsoleSync(
     cursor,
   );
   const research = loadResearchData();
+  const tvSignalSources = loadTvSignalSources();
 
   // Build payload
   const payload = {
@@ -639,6 +667,7 @@ export async function runConsoleSync(
     cell_grid: research.cellGrid,
     missed_opportunities: research.missedOpportunities,
     triage_matrix: triageMatrix,
+    tv_signal_sources: tvSignalSources,
   };
 
   const success = await pushToConsole(config, payload);
