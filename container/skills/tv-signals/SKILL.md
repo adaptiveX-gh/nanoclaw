@@ -188,12 +188,23 @@ For each `.json` file found:
      "signal_id": "tvs_abc123",
      "source_id": "buy-sell-signal",
      "received_at": "2026-04-12T14:30:00Z",
-     "raw_payload": { "...original TV JSON..." }
+     "raw_payload": { "...original TV JSON..." },
+     "source_config": {
+       "source_id": "buy-sell-signal",
+       "name": "Buy/Sell Signal",
+       "signal_rules": ["dedup", "regime_check", "rate_limit", "portfolio_exposure", "chart_vision", "technical_analysis"],
+       "rule_mode": "all_pass",
+       "allowed_pairs": ["ETH/USDT:USDT", "BTC/USDT:USDT"],
+       "stake_pct": 5.0,
+       "allow_exit_signals": false,
+       "dry_run": true
+     }
    }
    ```
 
-2. Look up `source_id` in `tv-signals.json` to get the source config
-   (allowed_pairs, signal_rules, stake_pct, etc.).
+2. Use `source_config` from the inbox file (preferred — carries the latest
+   dashboard config). Fall back to looking up `source_id` in `tv-signals.json`
+   only if `source_config` is missing.
 
 3. Verify `source.status == "active"` — if paused or disabled, skip the
    file and log `reason: "source_not_active"`.

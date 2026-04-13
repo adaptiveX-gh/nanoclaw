@@ -43,12 +43,24 @@ export interface TvInboxPollerDeps {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
+interface SourceConfig {
+  source_id: string;
+  name: string;
+  signal_rules: string[];
+  rule_mode: string;
+  allowed_pairs: string[];
+  stake_pct: number;
+  allow_exit_signals: boolean;
+  dry_run: boolean;
+}
+
 interface InboxSignal {
   id: string;
   signal_id: string;
   source_id: string;
   raw_payload: Record<string, unknown>;
   received_at: string;
+  source_config?: SourceConfig | null;
 }
 
 function findMainGroup(
@@ -66,15 +78,20 @@ function writeSignalToLocalInbox(
 ): void {
   const inboxDir = path.join(GROUPS_DIR, groupFolder, 'auto-mode', 'tv-inbox');
   fs.mkdirSync(inboxDir, { recursive: true });
+  const inboxData: Record<string, unknown> = {
+    signal_id: signal.signal_id,
+    source_id: signal.source_id,
+    received_at: signal.received_at,
+    raw_payload: signal.raw_payload,
+  };
+  // Include source config from dashboard so agent knows which rules to run
+  if (signal.source_config) {
+    inboxData.source_config = signal.source_config;
+  }
   fs.writeFileSync(
     path.join(inboxDir, `${signal.signal_id}.json`),
     JSON.stringify(
-      {
-        signal_id: signal.signal_id,
-        source_id: signal.source_id,
-        received_at: signal.received_at,
-        raw_payload: signal.raw_payload,
-      },
+      inboxData,
       null,
       2,
     ),
