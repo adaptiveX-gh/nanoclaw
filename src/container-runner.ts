@@ -377,6 +377,7 @@ function buildContainerArgs(
   for (const tvKey of [
     'TV_WEBHOOK_SECRET',
     'TV_MANUAL_BOT_URL',
+    'TV_MANUAL_BOT_PASSWORD',
     'TV_WEBHOOK_PORT',
   ]) {
     const val = envVal(tvKey);
