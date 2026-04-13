@@ -202,6 +202,41 @@ function loadTvSignalSources(): any[] {
   return allSources;
 }
 
+function loadTvSignalLog(): any[] {
+  // TV signal log lives under groups/<folder>/auto-mode/tv-signal-log.jsonl
+  const allEntries: any[] = [];
+  try {
+    if (!fs.existsSync(GROUPS_DIR)) return [];
+    for (const folder of fs.readdirSync(GROUPS_DIR)) {
+      const logFile = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'tv-signal-log.jsonl',
+      );
+      if (!fs.existsSync(logFile)) continue;
+      try {
+        const lines = fs
+          .readFileSync(logFile, 'utf-8')
+          .split('\n')
+          .filter((l: string) => l.trim());
+        for (const line of lines) {
+          try {
+            allEntries.push(JSON.parse(line));
+          } catch {
+            /* skip malformed lines */
+          }
+        }
+      } catch {
+        /* ignore read errors */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return allEntries;
+}
+
 function loadDeployments(): any[] {
   // Deployments live under groups/<folder>/auto-mode/deployments.json
   const allDeployments: any[] = [];
@@ -647,6 +682,7 @@ export async function runConsoleSync(
   );
   const research = loadResearchData();
   const tvSignalSources = loadTvSignalSources();
+  const tvSignalLog = loadTvSignalLog();
 
   // Build payload
   const payload = {
@@ -668,6 +704,7 @@ export async function runConsoleSync(
     missed_opportunities: research.missedOpportunities,
     triage_matrix: triageMatrix,
     tv_signal_sources: tvSignalSources,
+    tv_signal_log: tvSignalLog,
   };
 
   const success = await pushToConsole(config, payload);
