@@ -1,9 +1,10 @@
 /**
  * TV Inbox Poller
  *
- * Polls the Supabase tv_signal_inbox table for pending TradingView signals
- * that were received by the edge function. When found, writes them to the
- * agent's local tv-inbox directory and notifies the main group.
+ * Polls the Supabase tv-inbox-poll edge function for pending TradingView
+ * signals that were received by the tv-webhook edge function. When found,
+ * writes them to the agent's local tv-inbox directory and notifies the
+ * main group.
  *
  * This replaces the need for a tunnel or public IP — TradingView POSTs to
  * Supabase (public HTTPS), and NanoClaw polls from behind NAT (outbound only).
@@ -11,7 +12,7 @@
  * Environment variables (from .env):
  *   CONSOLE_SUPABASE_URL       — Supabase project URL
  *   CONSOLE_SUPABASE_ANON_KEY  — Supabase anon key
- *   CONSOLE_OPERATOR_ID        — operator UUID
+ *   CONSOLE_SYNC_KEY           — operator sync key for edge function auth
  */
 
 import fs from 'fs';
@@ -23,12 +24,11 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 const POLL_INTERVAL_MS = 5_000; // 5 seconds
-const BATCH_SIZE = 10;
 
 const ENV_KEYS = [
   'CONSOLE_SUPABASE_URL',
   'CONSOLE_SUPABASE_ANON_KEY',
-  'CONSOLE_OPERATOR_ID',
+  'CONSOLE_SYNC_KEY',
 ];
 
 export interface TvInboxPollerDeps {
@@ -102,33 +102,35 @@ async function pollInbox(
   deps: TvInboxPollerDeps,
   supabaseUrl: string,
   supabaseAnonKey: string,
-  operatorId: string,
+  syncKey: string,
 ): Promise<void> {
   try {
-    // Query pending signals via PostgREST
-    const url = `${supabaseUrl}/rest/v1/tv_signal_inbox?` +
-      `operator_id=eq.${operatorId}&status=eq.pending&order=received_at.asc&limit=${BATCH_SIZE}`;
-
-    const res = await fetch(url, {
+    // Poll via edge function (bypasses RLS using sync key auth)
+    const pollUrl = `${supabaseUrl}/functions/v1/tv-inbox-poll`;
+    const res = await fetch(pollUrl, {
+      method: 'POST',
       headers: {
         apikey: supabaseAnonKey,
         Authorization: `Bearer ${supabaseAnonKey}`,
         'Content-Type': 'application/json',
+        'X-Sync-Key': syncKey,
       },
+      body: JSON.stringify({ action: 'poll' }),
     });
 
     if (!res.ok) {
-      if (res.status !== 406) {
-        // 406 = no rows, expected
+      // Don't log for every 5s tick when there's nothing
+      if (res.status !== 200) {
         logger.debug(
           { status: res.status },
-          '[tv-inbox-poller] Fetch failed',
+          '[tv-inbox-poller] Poll request failed',
         );
       }
       return;
     }
 
-    const signals = (await res.json()) as InboxSignal[];
+    const data = (await res.json()) as { signals: InboxSignal[] };
+    const signals = data.signals;
     if (!signals || signals.length === 0) return;
 
     const groups = deps.registeredGroups();
@@ -143,25 +145,12 @@ async function pollInbox(
       '[tv-inbox-poller] Found pending signals',
     );
 
+    const ackIds: string[] = [];
+
     for (const signal of signals) {
       // Write to local inbox
       writeSignalToLocalInbox(main.folder, signal);
-
-      // Mark as picked_up in Supabase
-      const updateUrl = `${supabaseUrl}/rest/v1/tv_signal_inbox?id=eq.${signal.id}`;
-      await fetch(updateUrl, {
-        method: 'PATCH',
-        headers: {
-          apikey: supabaseAnonKey,
-          Authorization: `Bearer ${supabaseAnonKey}`,
-          'Content-Type': 'application/json',
-          Prefer: 'return=minimal',
-        },
-        body: JSON.stringify({
-          status: 'picked_up',
-          picked_up_at: new Date().toISOString(),
-        }),
-      });
+      ackIds.push(signal.id);
 
       // Notify main group
       const summary = summarizeSignal(signal.raw_payload);
@@ -178,6 +167,20 @@ async function pollInbox(
         '[tv-inbox-poller] Signal written to local inbox',
       );
     }
+
+    // Acknowledge all signals in a single call
+    if (ackIds.length > 0) {
+      await fetch(pollUrl, {
+        method: 'POST',
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          'Content-Type': 'application/json',
+          'X-Sync-Key': syncKey,
+        },
+        body: JSON.stringify({ action: 'ack', signal_ids: ackIds }),
+      });
+    }
   } catch (err) {
     logger.error({ err }, '[tv-inbox-poller] Poll error');
   }
@@ -191,11 +194,11 @@ export function startTvInboxPoller(deps: TvInboxPollerDeps): void {
   const env = readEnvFile(ENV_KEYS);
   const supabaseUrl = env.CONSOLE_SUPABASE_URL;
   const supabaseAnonKey = env.CONSOLE_SUPABASE_ANON_KEY;
-  const operatorId = env.CONSOLE_OPERATOR_ID;
+  const syncKey = env.CONSOLE_SYNC_KEY;
 
-  if (!supabaseUrl || !supabaseAnonKey || !operatorId) {
+  if (!supabaseUrl || !supabaseAnonKey || !syncKey) {
     logger.info(
-      '[tv-inbox-poller] Supabase not configured — TV inbox polling disabled',
+      '[tv-inbox-poller] Supabase or sync key not configured — TV inbox polling disabled',
     );
     return;
   }
@@ -206,12 +209,12 @@ export function startTvInboxPoller(deps: TvInboxPollerDeps): void {
   );
 
   // Poll immediately, then every 5s
-  pollInbox(deps, supabaseUrl, supabaseAnonKey, operatorId).catch((err) =>
+  pollInbox(deps, supabaseUrl, supabaseAnonKey, syncKey).catch((err) =>
     logger.error({ err }, '[tv-inbox-poller] Initial poll error'),
   );
 
   setInterval(() => {
-    pollInbox(deps, supabaseUrl, supabaseAnonKey, operatorId).catch((err) =>
+    pollInbox(deps, supabaseUrl, supabaseAnonKey, syncKey).catch((err) =>
       logger.error({ err }, '[tv-inbox-poller] Poll error'),
     );
   }, POLL_INTERVAL_MS);
