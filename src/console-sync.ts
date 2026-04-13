@@ -299,7 +299,7 @@ async function fetchEventsIncremental(
     const res = await fetch(`${config.aphexdataUrl}/api/v1/events?${params}`, {
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': config.aphexdataApiKey,
+        Authorization: `Bearer ${config.aphexdataApiKey}`,
       },
     });
     if (!res.ok) return { events: [], newCursorEventId: cursor.last_event_id };
