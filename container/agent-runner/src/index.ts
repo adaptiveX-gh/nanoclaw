@@ -488,7 +488,7 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
-): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
+): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean; sessionCorruption?: boolean }> {
   const stream = new MessageStream();
   stream.push(prompt);
 
@@ -636,6 +636,21 @@ async function runQuery(
       resultCount++;
       const textResult = 'result' in message ? (message as { result?: string }).result : null;
       log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+
+      // Detect API errors from stale session content (e.g. image blocks the API can't reprocess).
+      // Don't forward these to the user — the caller will retry with a fresh session.
+      const isCorruption = textResult && (
+        textResult.includes('Could not process image') ||
+        textResult.includes('Could not process content')
+      ) && sessionId;
+      if (isCorruption) {
+        log('Session corruption detected in result, signalling retry');
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = null;
+        ipcPolling = false;
+        return { newSessionId, lastAssistantUuid, closedDuringQuery, sessionCorruption: true };
+      }
+
       writeOutput({
         status: 'success',
         result: textResult || null,
@@ -700,7 +715,35 @@ async function main(): Promise<void> {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      let queryResult: Awaited<ReturnType<typeof runQuery>>;
+      try {
+        queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      } catch (queryErr) {
+        const msg = queryErr instanceof Error ? queryErr.message : String(queryErr);
+        // Detect stale session errors (image blocks, corrupted content, etc.)
+        // and retry with a fresh session instead of crashing.
+        const isSessionCorruption =
+          msg.includes('Could not process image') ||
+          msg.includes('invalid_request_error') ||
+          msg.includes('Could not process content');
+        if (isSessionCorruption && sessionId) {
+          log(`Session corruption detected: ${msg}. Retrying with fresh session...`);
+          sessionId = undefined;
+          resumeAt = undefined;
+          continue;
+        }
+        throw queryErr;
+      }
+
+      // If the query detected corrupted session content (e.g. stale image blocks),
+      // discard the session and retry the same prompt fresh.
+      if (queryResult.sessionCorruption) {
+        log('Retrying with fresh session after corruption detection');
+        sessionId = undefined;
+        resumeAt = undefined;
+        continue;
+      }
+
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
