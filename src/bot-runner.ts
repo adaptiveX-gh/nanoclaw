@@ -616,159 +616,159 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
   startingDeployments.add(deploymentId);
 
   try {
-  const containerName = `${CONTAINER_PREFIX}${deploymentId}`;
-  const strategy = req.strategy_name!;
-  const pair = req.pair!;
-  const timeframe = req.timeframe || '1h';
-  const dryRun = req.dry_run !== false;
+    const containerName = `${CONTAINER_PREFIX}${deploymentId}`;
+    const strategy = req.strategy_name!;
+    const pair = req.pair!;
+    const timeframe = req.timeframe || '1h';
+    const dryRun = req.dry_run !== false;
 
-  // If this bot is already running in activeBots, reuse its port and stop the
-  // existing container before regenerating the config.  This avoids the race
-  // window where config.json is overwritten with a new password while the old
-  // container is still live (NanoClaw restart between write and docker-rm would
-  // leave recovery reading a password the container was never started with).
-  const existingBot = activeBots.get(deploymentId);
-  if (existingBot) {
-    logger.info(
-      { deploymentId, existingPort: existingBot.port },
-      'start_bot called for already-running bot — stopping existing container first',
-    );
-    // Release the old port so allocatePort() can reuse it
-    portMap.delete(existingBot.port);
-    removeContainer(containerName);
-    activeBots.delete(deploymentId);
-  }
+    // If this bot is already running in activeBots, reuse its port and stop the
+    // existing container before regenerating the config.  This avoids the race
+    // window where config.json is overwritten with a new password while the old
+    // container is still live (NanoClaw restart between write and docker-rm would
+    // leave recovery reading a password the container was never started with).
+    const existingBot = activeBots.get(deploymentId);
+    if (existingBot) {
+      logger.info(
+        { deploymentId, existingPort: existingBot.port },
+        'start_bot called for already-running bot — stopping existing container first',
+      );
+      // Release the old port so allocatePort() can reuse it
+      portMap.delete(existingBot.port);
+      removeContainer(containerName);
+      activeBots.delete(deploymentId);
+    }
 
-  // Allocate port (reserves in portMap atomically)
-  const port = allocatePort(deploymentId);
-  if (port === null) {
-    throw new Error(
-      `No free ports available (max ${MAX_BOTS} bots, base port ${BASE_PORT})`,
-    );
-  }
-
-  // Find strategy file
-  const strategyFile = findStrategyFile(strategy, req.group_folder);
-  if (!strategyFile) {
-    throw new Error(
-      `Strategy file ${strategy}.py not found in group ${req.group_folder || 'unknown'}`,
-    );
-  }
-
-  // Remove existing container BEFORE writing the new config so the race window
-  // between "config overwritten with P2" and "old container still running with P1"
-  // is eliminated.  If NanoClaw crashes after this point, recovery will find no
-  // running container and the orphan config is harmless.
-  removeContainer(containerName);
-
-  // Generate password and config (written AFTER the old container is gone)
-  const password = generatePassword();
-  const configPath = generateBotConfig(
-    deploymentId,
-    strategy,
-    pair,
-    timeframe,
-    port,
-    password,
-    dryRun,
-  );
-
-  // Build docker run command
-  const strategiesDir = path.dirname(strategyFile);
-  const dataDir = path.join(CONFIGS_DIR, deploymentId, 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-
-  const dockerArgs = [
-    'run',
-    '-d',
-    '--name',
-    containerName,
-    '--restart',
-    'unless-stopped',
-    '-v',
-    `${strategiesDir}:/freqtrade/user_data/strategies:ro`,
-    '-v',
-    `${configPath}:/freqtrade/config.json:ro`,
-    '-v',
-    `${dataDir}:/freqtrade/user_data/data`,
-    '-p',
-    `${port}:8080`,
-    BOT_IMAGE,
-    'trade',
-    '--config',
-    '/freqtrade/config.json',
-    '--strategy',
-    strategy,
-  ];
-
-  logger.info(
-    { deploymentId, containerName, port, strategy, pair },
-    'Starting FreqTrade bot container',
-  );
-
-  // Retry with backoff for transient Docker failures (network, daemon restarts)
-  const MAX_START_RETRIES = 3;
-  const RETRY_DELAYS = [2_000, 5_000, 10_000];
-  let lastStartError: Error | undefined;
-
-  for (let attempt = 0; attempt < MAX_START_RETRIES; attempt++) {
-    try {
-      if (attempt > 0) {
-        removeContainer(containerName); // Clean up partial start
-        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt - 1]));
-        logger.info(
-          { deploymentId, attempt: attempt + 1 },
-          'Retrying bot container start',
-        );
-      }
-      dockerExec(dockerArgs);
-      lastStartError = undefined;
-      break;
-    } catch (err) {
-      lastStartError = err as Error;
-      logger.warn(
-        { deploymentId, attempt: attempt + 1, error: (err as Error).message },
-        'Docker run failed',
+    // Allocate port (reserves in portMap atomically)
+    const port = allocatePort(deploymentId);
+    if (port === null) {
+      throw new Error(
+        `No free ports available (max ${MAX_BOTS} bots, base port ${BASE_PORT})`,
       );
     }
-  }
 
-  if (lastStartError) {
-    // Release the pre-reserved port on failure
-    portMap.delete(port);
-    savePortMap();
-    throw lastStartError;
-  }
+    // Find strategy file
+    const strategyFile = findStrategyFile(strategy, req.group_folder);
+    if (!strategyFile) {
+      throw new Error(
+        `Strategy file ${strategy}.py not found in group ${req.group_folder || 'unknown'}`,
+      );
+    }
 
-  // Wait for FreqTrade API to accept connections before returning
-  try {
-    await waitForBotReady(port, password);
-  } catch (err) {
-    // Release port on readiness failure
-    portMap.delete(port);
-    savePortMap();
-    throw err;
-  }
+    // Remove existing container BEFORE writing the new config so the race window
+    // between "config overwritten with P2" and "old container still running with P1"
+    // is eliminated.  If NanoClaw crashes after this point, recovery will find no
+    // running container and the orphan config is harmless.
+    removeContainer(containerName);
 
-  const bot: BotInstance = {
-    deploymentId,
-    containerName,
-    port,
-    password,
-    strategy,
-    pair,
-    timeframe,
-    dryRun,
-    startedAt: new Date().toISOString(),
-    signalsActive: false, // starts stopped, monitor enables
-    status: 'running',
-  };
+    // Generate password and config (written AFTER the old container is gone)
+    const password = generatePassword();
+    const configPath = generateBotConfig(
+      deploymentId,
+      strategy,
+      pair,
+      timeframe,
+      port,
+      password,
+      dryRun,
+    );
 
-  activeBots.set(deploymentId, bot);
-  // Port already reserved by allocatePort() — no need to set again
-  writeBotStatus(bot);
+    // Build docker run command
+    const strategiesDir = path.dirname(strategyFile);
+    const dataDir = path.join(CONFIGS_DIR, deploymentId, 'data');
+    fs.mkdirSync(dataDir, { recursive: true });
 
-  return bot;
+    const dockerArgs = [
+      'run',
+      '-d',
+      '--name',
+      containerName,
+      '--restart',
+      'unless-stopped',
+      '-v',
+      `${strategiesDir}:/freqtrade/user_data/strategies:ro`,
+      '-v',
+      `${configPath}:/freqtrade/config.json:ro`,
+      '-v',
+      `${dataDir}:/freqtrade/user_data/data`,
+      '-p',
+      `${port}:8080`,
+      BOT_IMAGE,
+      'trade',
+      '--config',
+      '/freqtrade/config.json',
+      '--strategy',
+      strategy,
+    ];
+
+    logger.info(
+      { deploymentId, containerName, port, strategy, pair },
+      'Starting FreqTrade bot container',
+    );
+
+    // Retry with backoff for transient Docker failures (network, daemon restarts)
+    const MAX_START_RETRIES = 3;
+    const RETRY_DELAYS = [2_000, 5_000, 10_000];
+    let lastStartError: Error | undefined;
+
+    for (let attempt = 0; attempt < MAX_START_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          removeContainer(containerName); // Clean up partial start
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt - 1]));
+          logger.info(
+            { deploymentId, attempt: attempt + 1 },
+            'Retrying bot container start',
+          );
+        }
+        dockerExec(dockerArgs);
+        lastStartError = undefined;
+        break;
+      } catch (err) {
+        lastStartError = err as Error;
+        logger.warn(
+          { deploymentId, attempt: attempt + 1, error: (err as Error).message },
+          'Docker run failed',
+        );
+      }
+    }
+
+    if (lastStartError) {
+      // Release the pre-reserved port on failure
+      portMap.delete(port);
+      savePortMap();
+      throw lastStartError;
+    }
+
+    // Wait for FreqTrade API to accept connections before returning
+    try {
+      await waitForBotReady(port, password);
+    } catch (err) {
+      // Release port on readiness failure
+      portMap.delete(port);
+      savePortMap();
+      throw err;
+    }
+
+    const bot: BotInstance = {
+      deploymentId,
+      containerName,
+      port,
+      password,
+      strategy,
+      pair,
+      timeframe,
+      dryRun,
+      startedAt: new Date().toISOString(),
+      signalsActive: false, // starts stopped, monitor enables
+      status: 'running',
+    };
+
+    activeBots.set(deploymentId, bot);
+    // Port already reserved by allocatePort() — no need to set again
+    writeBotStatus(bot);
+
+    return bot;
   } finally {
     startingDeployments.delete(deploymentId);
   }
