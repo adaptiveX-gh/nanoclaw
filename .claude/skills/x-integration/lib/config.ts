@@ -14,10 +14,9 @@ const PROJECT_ROOT = process.env.NANOCLAW_ROOT || process.cwd();
  * Configuration object with all settings
  */
 export const config = {
-  // Chrome executable path
-  // Default: standard macOS Chrome location
-  // Override: CHROME_PATH environment variable
-  chromePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  // Chrome executable path — override via CHROME_PATH env var.
+  // Default: Windows standard path (macOS/Linux should set CHROME_PATH).
+  chromePath: process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
 
   // Browser profile directory for persistent login sessions
   browserDataDir: path.join(PROJECT_ROOT, 'data', 'x-browser-profile'),

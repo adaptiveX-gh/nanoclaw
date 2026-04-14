@@ -29,7 +29,8 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
-async function waitForResult(requestId: string, maxWait = 60000): Promise<{ success: boolean; message: string; data?: unknown }> {
+// Default must exceed host-side script timeout (120s) to avoid orphaned results
+async function waitForResult(requestId: string, maxWait = 150000): Promise<{ success: boolean; message: string; data?: unknown }> {
   const resultFile = path.join(RESULTS_DIR, `${requestId}.json`);
   const pollInterval = 1000;
   let elapsed = 0;
@@ -48,7 +49,7 @@ async function waitForResult(requestId: string, maxWait = 60000): Promise<{ succ
     elapsed += pollInterval;
   }
 
-  return { success: false, message: 'Request timed out waiting for host browser automation (60s)' };
+  return { success: false, message: `Request timed out waiting for host browser automation (${maxWait / 1000}s)` };
 }
 
 function mainOnly(): { content: [{ type: 'text'; text: string }]; isError: true } {

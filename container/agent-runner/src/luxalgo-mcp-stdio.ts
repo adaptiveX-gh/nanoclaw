@@ -29,9 +29,10 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
+// Default must exceed host-side script timeout (120s) to avoid orphaned results
 async function waitForResult(
   requestId: string,
-  maxWait = 60000,
+  maxWait = 150000,
 ): Promise<{ success: boolean; message: string; data?: unknown }> {
   const resultFile = path.join(RESULTS_DIR, `${requestId}.json`);
   const pollInterval = 1000;
@@ -112,8 +113,8 @@ After receiving PineScript code, you can convert it to a FreqTrade Python strate
       timestamp: new Date().toISOString(),
     });
 
-    // Longer timeout for chat — LLM streaming can take 60-90s
-    const result = await waitForResult(requestId, 120000);
+    // Must exceed host-side CHAT_TIMEOUT (180s) to avoid orphaned results
+    const result = await waitForResult(requestId, 210000);
     return {
       content: [
         {

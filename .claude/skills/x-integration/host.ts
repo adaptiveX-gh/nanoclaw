@@ -2,18 +2,53 @@
  * X Integration IPC Handler
  *
  * Handles all x_* IPC messages from container agents.
- * This is the entry point for X integration in the host process.
+ * This file is the canonical source — src/x-ipc.ts is compiled from it.
+ * Keep both in sync when modifying.
  */
 
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } }
+  transport: { target: 'pino-pretty', options: { colorize: true } },
 });
+
+// Chrome path must come from .env — nanoclaw never loads secrets into
+// process.env, and the x-integration scripts default to a macOS path
+// that won't exist on Windows/Linux. Read once at module load.
+function readEnvFile(keys: string[]): Record<string, string> {
+  const envFile = path.join(process.cwd(), '.env');
+  let content: string;
+  try {
+    content = fs.readFileSync(envFile, 'utf-8');
+  } catch {
+    return {};
+  }
+  const result: Record<string, string> = {};
+  const wanted = new Set(keys);
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    if (!wanted.has(key)) continue;
+    let value = trimmed.slice(eqIdx + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (value) result[key] = value;
+  }
+  return result;
+}
+
+const { CHROME_PATH } = readEnvFile(['CHROME_PATH']);
 
 interface SkillResult {
   success: boolean;
@@ -21,39 +56,89 @@ interface SkillResult {
   data?: unknown;
 }
 
-// Run a skill script as subprocess
-async function runScript(script: string, args: object): Promise<SkillResult> {
-  const scriptPath = path.join(process.cwd(), '.claude', 'skills', 'x-integration', 'scripts', `${script}.ts`);
+function runScript(script: string, args: object): Promise<SkillResult> {
+  const scriptPath = path.join(
+    process.cwd(),
+    '.claude',
+    'skills',
+    'x-integration',
+    'scripts',
+    `${script}.ts`,
+  );
 
   return new Promise((resolve) => {
     const proc = spawn('npx', ['tsx', scriptPath], {
       cwd: process.cwd(),
-      env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
-      stdio: ['pipe', 'pipe', 'pipe']
+      env: {
+        ...process.env,
+        NANOCLAW_ROOT: process.cwd(),
+        ...(CHROME_PATH ? { CHROME_PATH } : {}),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: true,
     });
 
     let stdout = '';
-    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    let stderr = '';
+    proc.stdout.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+    proc.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
     proc.stdin.write(JSON.stringify(args));
     proc.stdin.end();
 
+    // On Windows, SIGTERM only kills the shell — Chrome child processes
+    // survive and hold the browser profile lock, breaking subsequent calls.
+    // Use taskkill /F /T to kill the entire process tree on timeout.
+    const killTree = () => {
+      if (proc.pid == null) return;
+      if (process.platform === 'win32') {
+        try {
+          execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
+        } catch {
+          // process may have already exited
+        }
+      } else {
+        proc.kill('SIGTERM');
+      }
+    };
+
     const timer = setTimeout(() => {
-      proc.kill('SIGTERM');
+      killTree();
       resolve({ success: false, message: 'Script timed out (120s)' });
     }, 120000);
 
     proc.on('close', (code) => {
       clearTimeout(timer);
+      // Try parsing the last line of stdout as JSON — the browser scripts
+      // always write a JSON result to stdout, even on error (exit code 1).
+      // Only fall back to stderr/code if stdout doesn't contain valid JSON.
+      const trimmedStdout = stdout.trim();
+      if (trimmedStdout) {
+        try {
+          const lines = trimmedStdout.split('\n');
+          const parsed = JSON.parse(lines[lines.length - 1]) as SkillResult;
+          resolve(parsed);
+          return;
+        } catch {
+          // stdout wasn't valid JSON — fall through
+        }
+      }
       if (code !== 0) {
-        resolve({ success: false, message: `Script exited with code: ${code}` });
+        const detail = stderr.trim().slice(-500);
+        resolve({
+          success: false,
+          message: `Script exited with code: ${code}${detail ? ` — ${detail}` : ''}`,
+        });
         return;
       }
-      try {
-        const lines = stdout.trim().split('\n');
-        resolve(JSON.parse(lines[lines.length - 1]));
-      } catch {
-        resolve({ success: false, message: `Failed to parse output: ${stdout.slice(0, 200)}` });
-      }
+      resolve({
+        success: false,
+        message: `Failed to parse output: ${trimmedStdout.slice(0, 200)}`,
+      });
     });
 
     proc.on('error', (err) => {
@@ -63,32 +148,36 @@ async function runScript(script: string, args: object): Promise<SkillResult> {
   });
 }
 
-// Write result to IPC results directory
-function writeResult(dataDir: string, sourceGroup: string, requestId: string, result: SkillResult): void {
+function writeResult(
+  dataDir: string,
+  sourceGroup: string,
+  requestId: string,
+  result: SkillResult,
+): void {
   const resultsDir = path.join(dataDir, 'ipc', sourceGroup, 'x_results');
   fs.mkdirSync(resultsDir, { recursive: true });
-  fs.writeFileSync(path.join(resultsDir, `${requestId}.json`), JSON.stringify(result));
+  fs.writeFileSync(
+    path.join(resultsDir, `${requestId}.json`),
+    JSON.stringify(result),
+  );
 }
 
 /**
- * Handle X integration IPC messages
- *
+ * Handle X integration IPC messages.
  * @returns true if message was handled, false if not an X message
  */
 export async function handleXIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
   isMain: boolean,
-  dataDir: string
+  dataDir: string,
 ): Promise<boolean> {
   const type = data.type as string;
 
-  // Only handle x_* types
   if (!type?.startsWith('x_')) {
     return false;
   }
 
-  // Only main group can use X integration
   if (!isMain) {
     logger.warn({ sourceGroup, type }, 'X integration blocked: not main group');
     return true;
@@ -126,7 +215,10 @@ export async function handleXIpc(
         result = { success: false, message: 'Missing tweetUrl or content' };
         break;
       }
-      result = await runScript('reply', { tweetUrl: data.tweetUrl, content: data.content });
+      result = await runScript('reply', {
+        tweetUrl: data.tweetUrl,
+        content: data.content,
+      });
       break;
 
     case 'x_retweet':
@@ -142,7 +234,28 @@ export async function handleXIpc(
         result = { success: false, message: 'Missing tweetUrl or comment' };
         break;
       }
-      result = await runScript('quote', { tweetUrl: data.tweetUrl, comment: data.comment });
+      result = await runScript('quote', {
+        tweetUrl: data.tweetUrl,
+        comment: data.comment,
+      });
+      break;
+
+    case 'x_read_timeline':
+      result = await runScript('read_timeline', {
+        count: data.count ?? 20,
+      });
+      break;
+
+    case 'x_search':
+      if (!data.query) {
+        result = { success: false, message: 'Missing query' };
+        break;
+      }
+      result = await runScript('search', {
+        query: data.query,
+        count: data.count ?? 20,
+        tab: data.tab ?? 'latest',
+      });
       break;
 
     default:
@@ -153,7 +266,10 @@ export async function handleXIpc(
   if (result.success) {
     logger.info({ type, requestId }, 'X request completed');
   } else {
-    logger.error({ type, requestId, message: result.message }, 'X request failed');
+    logger.error(
+      { type, requestId, message: result.message },
+      'X request failed',
+    );
   }
   return true;
 }
