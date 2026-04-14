@@ -382,6 +382,19 @@ Run the chart-vision skill on the signal's pair and timeframe. This captures a
 TradingView chart snapshot and performs visual analysis.
 
 **Invoke:** Follow chart-vision Step 1-4 workflow for the signal's pair/timeframe.
+
+**Chart mode selection:**
+- If `source_config.rule_config.chart_vision.layout_id` exists → use **Mode B**
+  (layout chart) with that layout ID. This captures the user's exact TradingView
+  setup with all saved indicators and drawings.
+- Otherwise → use **Mode A** (advanced chart) with default indicators.
+
+**Custom analysis guidelines:**
+- If `source_config.rule_config.chart_vision.custom_prompt` exists → append it
+  to the chart analysis prompt as **"Additional Analysis Guidelines"**. The agent
+  MUST consider these guidelines when interpreting the chart and forming a
+  directional bias. Example: "Don't go long when ALTS BUY SIGNAL is red/pink."
+
 Read `deployment_gate_input` from `{WORKSPACE}/reports/chart-analysis-latest.json`.
 
 **Check:**

@@ -190,14 +190,24 @@ If a previous chart analysis exists, parse it for diff mode comparison.
 4. Verify capture succeeded:
 
 ```bash
-test -s /tmp/chart-BTCUSDT-4h.png && echo "CAPTURE OK" || echo "CAPTURE FAILED"
+# Size check
+test -s /tmp/chart-{SYMBOL}-{INTERVAL}.png || { echo "CAPTURE FAILED — empty file"; exit 1; }
+
+# PNG magic-byte check — MUST pass before reading the file
+MAGIC=$(xxd -l 4 -p /tmp/chart-{SYMBOL}-{INTERVAL}.png 2>/dev/null)
+if [ "$MAGIC" != "89504e47" ]; then
+  echo "CAPTURE FAILED — not a PNG image. API returned:"
+  cat /tmp/chart-{SYMBOL}-{INTERVAL}.png
+  echo ""
+  echo "Check: CHART_IMG_API_KEY set? Rate limit hit? Symbol format correct?"
+else
+  echo "CAPTURE OK — valid PNG"
+fi
 ```
 
-If capture fails, check the response for error messages:
-```bash
-file /tmp/chart-BTCUSDT-4h.png
-# Should show "PNG image data". If it shows "HTML" or "ASCII text", the API returned an error.
-```
+**CRITICAL:** Do NOT read the file for vision analysis if the magic-byte check fails.
+If the capture fails, skip the chart_vision rule (treat as PASS with `confidence: null`)
+and note the capture failure in the result detail.
 
 ### Step 2 — Read the Image
 

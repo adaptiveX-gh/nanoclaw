@@ -321,6 +321,7 @@ function buildContainerArgs(
     'GITHUB_TOKEN',
     'TV_WEBHOOK_SECRET',
     'TV_MANUAL_BOT_URL',
+    'TV_MANUAL_BOT_PASSWORD',
     'TV_WEBHOOK_PORT',
     'CHART_IMG_API_KEY',
     'TRADINGVIEW_SESSION_ID',
