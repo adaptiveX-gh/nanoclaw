@@ -233,7 +233,10 @@ function handleWebhook(
   try {
     deps.injectSystemMessage(main.jid, text);
   } catch (err) {
-    logger.error({ err, signalId }, 'Failed to inject system message for TV signal');
+    logger.error(
+      { err, signalId },
+      'Failed to inject system message for TV signal',
+    );
   }
 }
 
