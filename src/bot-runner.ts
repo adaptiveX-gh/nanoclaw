@@ -18,7 +18,7 @@
  * restarts. On startup, recovers state from existing Docker containers.
  */
 
-import { execSync, spawn, ChildProcess } from 'child_process';
+import { execFileSync, spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
@@ -569,11 +569,16 @@ function generateBotConfig(
 
 // ─── Docker Container Management ────────────────────────────────────
 
-function dockerExec(args: string[]): string {
+/**
+ * Execute a Docker command by spawning docker directly (no shell).
+ * Using execFileSync avoids cmd.exe shell escaping issues on Windows
+ * where volume-mount colons and backslashes get misinterpreted.
+ */
+function dockerExec(args: string[], timeoutMs = 30_000): string {
   try {
-    return execSync(`docker ${args.join(' ')}`, {
+    return execFileSync('docker', args, {
       encoding: 'utf-8',
-      timeout: 30_000,
+      timeout: timeoutMs,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
   } catch (err) {
@@ -1358,7 +1363,7 @@ function recoverExistingBots(): void {
           // file after a Docker Desktop restart).
           let actualPort = status.api_port;
           try {
-            const portOutput = execSync(`docker port ${containerName} 8080`, {
+            const portOutput = execFileSync('docker', ['port', containerName, '8080'], {
               encoding: 'utf-8',
               timeout: 5000,
             }).trim();

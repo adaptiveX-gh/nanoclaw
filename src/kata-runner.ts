@@ -15,7 +15,7 @@
  * Monitors kata-state.json inside race dirs every 30s to update status.
  */
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -124,11 +124,16 @@ let monitorTimer: ReturnType<typeof setInterval> | undefined;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function dockerExec(args: string[]): string {
+/**
+ * Execute a Docker command by spawning docker directly (no shell).
+ * Using execFileSync avoids cmd.exe shell escaping issues on Windows
+ * where volume-mount colons and backslashes get misinterpreted.
+ */
+function dockerExec(args: string[], timeoutMs = 30_000): string {
   try {
-    return execSync(`docker ${args.join(' ')}`, {
+    return execFileSync('docker', args, {
       encoding: 'utf-8',
-      timeout: 30_000,
+      timeout: timeoutMs,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
   } catch (err) {
@@ -356,11 +361,14 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
   const maxExperiments = req.max_experiments || 50;
 
   // Build docker run command
+  // --entrypoint overrides the image's Node.js entrypoint so we can run Python directly
   const dockerArgs = [
     'run',
     '-d',
     '--name',
     containerName,
+    '--entrypoint',
+    'python3',
     // No --restart: kata containers are finite-duration jobs
     '-v',
     `${raceDir}:/workspace/race`,
@@ -382,7 +390,6 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
     `TARGET_TIMEFRAME=${timeframe}`,
     ...hostGatewayArgs(),
     CONTAINER_IMAGE,
-    'python3',
     '/app/kata/iterate_container.py',
     '--race-dir',
     '/workspace/race',
@@ -390,8 +397,6 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
     '/freqtrade/user_data/data',
     '--knowledge-dir',
     '/workspace/knowledge',
-    '--scoring-config',
-    '/app/kata/scoring-config-defaults.json',
     '--max-experiments',
     String(maxExperiments),
     '--target-pair',
@@ -405,11 +410,37 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
     'Starting kata race container',
   );
 
-  try {
-    dockerExec(dockerArgs);
-  } catch (err) {
+  // Retry with backoff for transient Docker failures (network, daemon restarts)
+  const MAX_START_RETRIES = 3;
+  const RETRY_DELAYS = [2_000, 5_000, 10_000];
+  let lastStartError: Error | undefined;
+
+  for (let attempt = 0; attempt < MAX_START_RETRIES; attempt++) {
+    try {
+      if (attempt > 0) {
+        removeContainer(containerName);
+        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt - 1]));
+        logger.info(
+          { raceId, attempt: attempt + 1 },
+          'Retrying kata container start',
+        );
+      }
+      // Use 120s timeout for docker run (volume mount sharing on Windows can be slow)
+      dockerExec(dockerArgs, 120_000);
+      lastStartError = undefined;
+      break;
+    } catch (err) {
+      lastStartError = err as Error;
+      logger.warn(
+        { raceId, attempt: attempt + 1, error: (err as Error).message },
+        'Docker run failed',
+      );
+    }
+  }
+
+  if (lastStartError) {
     throw new Error(
-      `Failed to start kata container: ${(err as Error).message}`,
+      `Failed to start kata container after ${MAX_START_RETRIES} attempts: ${lastStartError.message}`,
     );
   }
 
