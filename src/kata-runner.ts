@@ -19,8 +19,16 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { CONTAINER_IMAGE, CREDENTIAL_PROXY_PORT, DATA_DIR, GROUPS_DIR } from './config.js';
-import { CONTAINER_HOST_GATEWAY, hostGatewayArgs } from './container-runtime.js';
+import {
+  CONTAINER_IMAGE,
+  CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
+  GROUPS_DIR,
+} from './config.js';
+import {
+  CONTAINER_HOST_GATEWAY,
+  hostGatewayArgs,
+} from './container-runtime.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 
@@ -44,12 +52,14 @@ const MAX_RACES = parseInt(
 );
 
 // kata/ dir on host — mounted as /app/kata:ro inside containers
-const KATA_DIR = process.env.KATA_RUNNER_KATA_DIR ||
+const KATA_DIR =
+  process.env.KATA_RUNNER_KATA_DIR ||
   kataEnv.KATA_RUNNER_KATA_DIR ||
   path.resolve(process.cwd(), '..', 'freqtrade-agents', 'kata');
 
 // FreqTrade config.json on host
-const FT_CONFIG = process.env.KATA_RUNNER_FT_CONFIG ||
+const FT_CONFIG =
+  process.env.KATA_RUNNER_FT_CONFIG ||
   kataEnv.KATA_RUNNER_FT_CONFIG ||
   path.join(DATA_DIR, 'sessions', 'ft-config.json');
 
@@ -130,7 +140,10 @@ function dockerExec(args: string[]): string {
 function isContainerRunning(containerName: string): boolean {
   try {
     const result = dockerExec([
-      'inspect', '--format', '"{{.State.Running}}"', containerName,
+      'inspect',
+      '--format',
+      '"{{.State.Running}}"',
+      containerName,
     ]);
     return result.replace(/"/g, '') === 'true';
   } catch {
@@ -146,7 +159,10 @@ function removeContainer(containerName: string): void {
   }
 }
 
-function writeRaceStatus(race: RaceInstance, extra?: Partial<RaceStatusFile>): void {
+function writeRaceStatus(
+  race: RaceInstance,
+  extra?: Partial<RaceStatusFile>,
+): void {
   const statusPath = path.join(RACES_DIR, `${race.raceId}.status.json`);
 
   // Preserve fields from previous status
@@ -155,14 +171,20 @@ function writeRaceStatus(race: RaceInstance, extra?: Partial<RaceStatusFile>): v
     if (fs.existsSync(statusPath)) {
       prev = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
     }
-  } catch { /* rewrite from scratch */ }
+  } catch {
+    /* rewrite from scratch */
+  }
 
   const statusFile: RaceStatusFile = {
     race_id: race.raceId,
     status: race.status,
     container_name: race.containerName,
     candidate_name: race.candidateName,
-    target: { archetype: race.archetype, pair: race.pair, timeframe: race.timeframe },
+    target: {
+      archetype: race.archetype,
+      pair: race.pair,
+      timeframe: race.timeframe,
+    },
     experiments: prev.experiments || 0,
     max_experiments: race.maxExperiments,
     current_score: prev.current_score || 0,
@@ -180,7 +202,10 @@ function writeRaceStatus(race: RaceInstance, extra?: Partial<RaceStatusFile>): v
   fs.writeFileSync(statusPath, JSON.stringify(statusFile, null, 2));
 }
 
-function writeRequestStatus(requestId: string, status: Record<string, unknown>): void {
+function writeRequestStatus(
+  requestId: string,
+  status: Record<string, unknown>,
+): void {
   const statusPath = path.join(REQUEST_DIR, `${requestId}.status.json`);
   fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
 }
@@ -232,7 +257,13 @@ function resolveKnowledgeDir(groupFolder?: string): string {
 function resolveDataDir(): string {
   // Check for group-level freqtrade data
   for (const folder of fs.readdirSync(GROUPS_DIR)) {
-    const ftData = path.join(DATA_DIR, 'sessions', folder, 'freqtrade-user-data', 'data');
+    const ftData = path.join(
+      DATA_DIR,
+      'sessions',
+      folder,
+      'freqtrade-user-data',
+      'data',
+    );
     if (fs.existsSync(ftData)) return ftData;
   }
   // Fallback
@@ -250,8 +281,9 @@ function copyGraduateToRacesDir(raceId: string, raceDir: string): void {
     let sourceFile: string | null = null;
 
     if (fs.existsSync(graduatesDir)) {
-      const pyFiles = fs.readdirSync(graduatesDir)
-        .filter(f => f.endsWith('.py'))
+      const pyFiles = fs
+        .readdirSync(graduatesDir)
+        .filter((f) => f.endsWith('.py'))
         .sort()
         .reverse();
       if (pyFiles.length > 0) {
@@ -268,7 +300,10 @@ function copyGraduateToRacesDir(raceId: string, raceDir: string): void {
     if (sourceFile) {
       const destPath = path.join(RACES_DIR, `${raceId}.graduate.py`);
       fs.copyFileSync(sourceFile, destPath);
-      logger.info({ raceId, source: sourceFile }, 'Copied graduate to races dir');
+      logger.info(
+        { raceId, source: sourceFile },
+        'Copied graduate to races dir',
+      );
     }
   } catch (err) {
     logger.warn({ raceId, err }, 'Failed to copy graduate file');
@@ -282,8 +317,9 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
   const containerName = `${CONTAINER_PREFIX}${raceId}`;
 
   // Check concurrent limit
-  const runningCount = Array.from(activeRaces.values())
-    .filter(r => r.status === 'running').length;
+  const runningCount = Array.from(activeRaces.values()).filter(
+    (r) => r.status === 'running',
+  ).length;
   if (runningCount >= MAX_RACES) {
     throw new Error(
       `Max concurrent races reached (${MAX_RACES}). Stop a race first.`,
@@ -321,28 +357,47 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
 
   // Build docker run command
   const dockerArgs = [
-    'run', '-d',
-    '--name', containerName,
+    'run',
+    '-d',
+    '--name',
+    containerName,
     // No --restart: kata containers are finite-duration jobs
-    '-v', `${raceDir}:/workspace/race`,
-    '-v', `${dataDir}:/freqtrade/user_data/data:ro`,
-    '-v', `${knowledgeDir}:/workspace/knowledge`,
-    '-v', `${KATA_DIR}:/app/kata:ro`,
-    '-v', `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
-    '-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-    '-e', 'ANTHROPIC_API_KEY=placeholder',
-    '-e', `TARGET_PAIR=${pair}`,
-    '-e', `TARGET_TIMEFRAME=${timeframe}`,
+    '-v',
+    `${raceDir}:/workspace/race`,
+    '-v',
+    `${dataDir}:/freqtrade/user_data/data:ro`,
+    '-v',
+    `${knowledgeDir}:/workspace/knowledge`,
+    '-v',
+    `${KATA_DIR}:/app/kata:ro`,
+    '-v',
+    `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    '-e',
+    'ANTHROPIC_API_KEY=placeholder',
+    '-e',
+    `TARGET_PAIR=${pair}`,
+    '-e',
+    `TARGET_TIMEFRAME=${timeframe}`,
     ...hostGatewayArgs(),
     CONTAINER_IMAGE,
-    'python3', '/app/kata/iterate_container.py',
-    '--race-dir', '/workspace/race',
-    '--data-dir', '/freqtrade/user_data/data',
-    '--knowledge-dir', '/workspace/knowledge',
-    '--scoring-config', '/app/kata/scoring-config-defaults.json',
-    '--max-experiments', String(maxExperiments),
-    '--target-pair', pair,
-    '--target-timeframe', timeframe,
+    'python3',
+    '/app/kata/iterate_container.py',
+    '--race-dir',
+    '/workspace/race',
+    '--data-dir',
+    '/freqtrade/user_data/data',
+    '--knowledge-dir',
+    '/workspace/knowledge',
+    '--scoring-config',
+    '/app/kata/scoring-config-defaults.json',
+    '--max-experiments',
+    String(maxExperiments),
+    '--target-pair',
+    pair,
+    '--target-timeframe',
+    timeframe,
   ];
 
   logger.info(
@@ -353,7 +408,9 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
   try {
     dockerExec(dockerArgs);
   } catch (err) {
-    throw new Error(`Failed to start kata container: ${(err as Error).message}`);
+    throw new Error(
+      `Failed to start kata container: ${(err as Error).message}`,
+    );
   }
 
   const race: RaceInstance = {
@@ -395,7 +452,9 @@ async function stopRaceContainer(raceId: string): Promise<void> {
         status.status = 'stopped';
         status.updated_at = new Date().toISOString();
         fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
   }
 }
@@ -546,7 +605,10 @@ async function processRequest(requestFile: string): Promise<void> {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ requestId, err: msg, type: req.type }, 'Kata request failed');
+    logger.error(
+      { requestId, err: msg, type: req.type },
+      'Kata request failed',
+    );
     writeRequestStatus(requestId, {
       request_id: requestId,
       type: req.type,
@@ -564,14 +626,18 @@ async function processRequest(requestFile: string): Promise<void> {
 function recoverExistingRaces(): void {
   try {
     const output = dockerExec([
-      'ps', '--filter', `name=${CONTAINER_PREFIX}`, '--format', '"{{.Names}}"',
+      'ps',
+      '--filter',
+      `name=${CONTAINER_PREFIX}`,
+      '--format',
+      '"{{.Names}}"',
     ]);
     if (!output) return;
 
     const containers = output
       .split('\n')
-      .map(s => s.replace(/"/g, '').trim())
-      .filter(s => s.startsWith(CONTAINER_PREFIX));
+      .map((s) => s.replace(/"/g, '').trim())
+      .filter((s) => s.startsWith(CONTAINER_PREFIX));
 
     for (const containerName of containers) {
       const raceId = containerName.replace(CONTAINER_PREFIX, '');
@@ -597,7 +663,10 @@ function recoverExistingRaces(): void {
           activeRaces.set(raceId, race);
           logger.info({ raceId, containerName }, 'Recovered kata race');
         } catch {
-          logger.warn({ raceId }, 'Failed to parse race status — tracking container only');
+          logger.warn(
+            { raceId },
+            'Failed to parse race status — tracking container only',
+          );
           activeRaces.set(raceId, {
             raceId,
             containerName,
@@ -615,7 +684,10 @@ function recoverExistingRaces(): void {
     }
 
     if (containers.length > 0) {
-      logger.info({ count: containers.length }, 'Recovered existing kata races');
+      logger.info(
+        { count: containers.length },
+        'Recovered existing kata races',
+      );
     }
   } catch {
     // No Docker or no containers — fine
@@ -634,10 +706,10 @@ function pollRequests(): void {
 
     const files = fs
       .readdirSync(REQUEST_DIR)
-      .filter(f => f.endsWith('.request.json'));
+      .filter((f) => f.endsWith('.request.json'));
 
     for (const file of files) {
-      processRequest(file).catch(err => {
+      processRequest(file).catch((err) => {
         logger.error({ err, file }, 'Unhandled error processing kata request');
       });
     }

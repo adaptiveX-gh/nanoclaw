@@ -112,11 +112,13 @@ export function cleanupOrphans(): void {
       .split('\n')
       .filter(Boolean)
       .map((name) => name.replace(/^'+|'+$/g, ''));
-    const persistent = allContainers.filter((name) =>
-      name.startsWith('nanoclaw-bot-') || name.startsWith('nanoclaw-kata-'),
+    const persistent = allContainers.filter(
+      (name) =>
+        name.startsWith('nanoclaw-bot-') || name.startsWith('nanoclaw-kata-'),
     );
     const orphans = allContainers.filter(
-      (name) => !name.startsWith('nanoclaw-bot-') && !name.startsWith('nanoclaw-kata-'),
+      (name) =>
+        !name.startsWith('nanoclaw-bot-') && !name.startsWith('nanoclaw-kata-'),
     );
     if (persistent.length > 0) {
       logger.info(
