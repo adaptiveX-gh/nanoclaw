@@ -278,6 +278,27 @@ function buildVolumeMounts(
     });
   }
 
+  // Kata runner race status (read-only — agents read race status files)
+  const kataRacesDir = path.join(DATA_DIR, 'kata-runner', 'races');
+  if (fs.existsSync(kataRacesDir)) {
+    mounts.push({
+      hostPath: kataRacesDir,
+      containerPath: '/workspace/extra/kata-runner/races',
+      readonly: true,
+    });
+  }
+
+  // Kata runner request queue (writable for main group only)
+  if (isMain) {
+    const kataRequestDir = path.join(DATA_DIR, 'kata-runner', 'requests');
+    fs.mkdirSync(kataRequestDir, { recursive: true });
+    mounts.push({
+      hostPath: kataRequestDir,
+      containerPath: '/workspace/extra/kata-runner/requests',
+      readonly: false,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(

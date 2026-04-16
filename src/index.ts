@@ -48,6 +48,7 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startBotRunner } from './bot-runner.js';
+import { startKataRunner } from './kata-runner.js';
 import { startConsoleSync } from './console-sync.js';
 import { startTvWebhook } from './tv-webhook.js';
 import { startTvInboxPoller } from './tv-inbox-poller.js';
@@ -640,6 +641,7 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
   });
+  startKataRunner();
   startConsoleSync(getDb(), DATA_DIR);
   startTvWebhook({
     injectSystemMessage: (jid, text) => {

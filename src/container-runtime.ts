@@ -112,16 +112,16 @@ export function cleanupOrphans(): void {
       .split('\n')
       .filter(Boolean)
       .map((name) => name.replace(/^'+|'+$/g, ''));
-    const bots = allContainers.filter((name) =>
-      name.startsWith('nanoclaw-bot-'),
+    const persistent = allContainers.filter((name) =>
+      name.startsWith('nanoclaw-bot-') || name.startsWith('nanoclaw-kata-'),
     );
     const orphans = allContainers.filter(
-      (name) => !name.startsWith('nanoclaw-bot-'),
+      (name) => !name.startsWith('nanoclaw-bot-') && !name.startsWith('nanoclaw-kata-'),
     );
-    if (bots.length > 0) {
+    if (persistent.length > 0) {
       logger.info(
-        { count: bots.length, names: bots },
-        'Preserved running bot containers',
+        { count: persistent.length, names: persistent },
+        'Preserved running bot/kata containers',
       );
     }
     for (const name of orphans) {

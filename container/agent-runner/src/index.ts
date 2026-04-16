@@ -341,8 +341,8 @@ function waitForIpcMessage(): Promise<string | null> {
 const CAPABILITY_SERVERS: Record<CapabilityProfile, Set<string>> = {
   core:     new Set(['nanoclaw', 'orderflow']),
   research: new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'youtube']),
-  trading:  new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'aphexdata', 'botrunner', 'youtube']),
-  full:     new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'aphexdata', 'botrunner', 'x', 'luxalgo', 'youtube', 'debug']),
+  trading:  new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'aphexdata', 'botrunner', 'katarunner', 'youtube']),
+  full:     new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'aphexdata', 'botrunner', 'katarunner', 'x', 'luxalgo', 'youtube', 'debug']),
 };
 
 /**
@@ -433,6 +433,20 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         args: [path.join(path.dirname(mcpServerPath), 'bot-mcp-stdio.js')],
         env: {
           BOT_RUNNER_DIR: botRunnerDir,
+        },
+      };
+    }
+  }
+
+  // katarunner: kata race lifecycle — main group only + kata-runner dir exists
+  if (enabled.has('katarunner')) {
+    const kataRunnerDir = '/workspace/extra/kata-runner';
+    if (containerInput.isMain && fs.existsSync(kataRunnerDir)) {
+      servers.katarunner = {
+        command: 'node',
+        args: [path.join(path.dirname(mcpServerPath), 'kata-mcp-stdio.js')],
+        env: {
+          KATA_RUNNER_DIR: kataRunnerDir,
         },
       };
     }
