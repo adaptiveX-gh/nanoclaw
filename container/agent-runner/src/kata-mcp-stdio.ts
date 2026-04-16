@@ -300,7 +300,7 @@ server.tool(
       return ok({
         race_id: args.race_id,
         candidate_name: status.candidate_name,
-        graduate_file: path.basename(graduateFile),
+        graduate_file: path.basename(graduatePath),
         strategy_code: code,
         final_score: status.best_score,
         experiments: status.experiments,
