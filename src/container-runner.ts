@@ -402,9 +402,9 @@ function buildContainerArgs(
   ];
   const tvMissing = tvRequiredKeys.filter((k) => !envVal(k));
   if (tvMissing.length > 0) {
-    logger.warn(
+    logger.debug(
       { missing: tvMissing },
-      'TV signal env vars missing — tv-manual bot trades will fail',
+      'TV signal env vars not in .env — agent will discover from bot status file',
     );
   }
   for (const tvKey of [

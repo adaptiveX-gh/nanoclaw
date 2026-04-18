@@ -256,6 +256,144 @@ function resolveKnowledgeDir(groupFolder?: string): string {
   return dir;
 }
 
+// ---------------------------------------------------------------------------
+// Self-healing: fix environment issues before container launch
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensure FT_CONFIG is a valid JSON file. If it's a directory (Docker artifact
+ * from mounting a non-existent path) or missing, generate a minimal
+ * backtesting config.
+ */
+function ensureConfig(): void {
+  if (fs.existsSync(FT_CONFIG) && fs.statSync(FT_CONFIG).isDirectory()) {
+    logger.warn({ path: FT_CONFIG }, 'FT_CONFIG is a directory — removing and regenerating');
+    fs.rmSync(FT_CONFIG, { recursive: true });
+  }
+
+  if (!fs.existsSync(FT_CONFIG)) {
+    logger.info({ path: FT_CONFIG }, 'Generating FreqTrade backtesting config');
+    fs.mkdirSync(path.dirname(FT_CONFIG), { recursive: true });
+    fs.writeFileSync(
+      FT_CONFIG,
+      JSON.stringify(
+        {
+          trading_mode: 'futures',
+          margin_mode: 'isolated',
+          stake_currency: 'USDT',
+          stake_amount: 'unlimited',
+          max_open_trades: 3,
+          dry_run: true,
+          dry_run_wallet: 1000,
+          exchange: { name: 'binance', key: '', secret: '' },
+          entry_pricing: { price_side: 'other', use_order_book: true, order_book_top: 1 },
+          exit_pricing: { price_side: 'other', use_order_book: true, order_book_top: 1 },
+          pairlists: [{ method: 'StaticPairList' }],
+        },
+        null,
+        2,
+      ),
+    );
+  }
+}
+
+/**
+ * Copy OHLCV files from {dataDir}/futures/ to {dataDir}/binance/futures/
+ * if they exist in the wrong location. FreqTrade expects data under
+ * {dataDir}/{exchange}/futures/.
+ */
+function normalizeDataPaths(dataDir: string): void {
+  const wrongDir = path.join(dataDir, 'futures');
+  const rightDir = path.join(dataDir, 'binance', 'futures');
+
+  if (!fs.existsSync(wrongDir)) return;
+  fs.mkdirSync(rightDir, { recursive: true });
+
+  for (const file of fs.readdirSync(wrongDir)) {
+    if (!file.endsWith('.feather') && !file.endsWith('.json')) continue;
+    const src = path.join(wrongDir, file);
+    const dst = path.join(rightDir, file);
+    if (!fs.existsSync(dst)) {
+      fs.copyFileSync(src, dst);
+      logger.info({ file }, 'Copied OHLCV file from futures/ to binance/futures/');
+    }
+  }
+}
+
+/**
+ * Download OHLCV data for a pair/timeframe if missing or stale (>7 days).
+ * Runs a short-lived Docker container with FreqTrade. Non-fatal — if
+ * download fails, the in-container preflight_check() will catch it.
+ */
+function ensureData(dataDir: string, pair: string, timeframe: string): void {
+  const pairSlug = pair.replace(/[/:]/g, '_');
+  const rightDir = path.join(dataDir, 'binance', 'futures');
+  fs.mkdirSync(rightDir, { recursive: true });
+
+  // Check if data exists and is fresh (< 7 days old)
+  let needsDownload = true;
+  for (const ext of ['feather', 'json']) {
+    const fpath = path.join(rightDir, `${pairSlug}-${timeframe}-futures.${ext}`);
+    if (fs.existsSync(fpath)) {
+      const ageDays = (Date.now() - fs.statSync(fpath).mtimeMs) / 86_400_000;
+      if (ageDays < 7) {
+        needsDownload = false;
+      } else {
+        logger.info(
+          { pair, timeframe, ageDays: Math.round(ageDays) },
+          'Data stale — downloading fresh',
+        );
+      }
+      break;
+    }
+  }
+  if (!needsDownload) return;
+
+  // Compute timerange: 456 days back (4 windows × 114 days)
+  const end = new Date();
+  const start = new Date(end.getTime() - 456 * 86_400_000);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '');
+  const timerange = `${fmt(start)}-${fmt(end)}`;
+
+  logger.info({ pair, timeframe, timerange }, 'Downloading OHLCV data via container');
+
+  try {
+    dockerExec(
+      [
+        'run',
+        '--rm',
+        '--entrypoint',
+        'freqtrade',
+        '-v',
+        `${dataDir}:/freqtrade/user_data/data`,
+        '-v',
+        `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
+        CONTAINER_IMAGE,
+        'download-data',
+        '--config',
+        '/freqtrade/user_data/config.json',
+        '--pairs',
+        pair,
+        '--timeframe',
+        timeframe,
+        '--timerange',
+        timerange,
+        '--trading-mode',
+        'futures',
+        '--datadir',
+        '/freqtrade/user_data/data',
+      ],
+      300_000,
+    ); // 5 min timeout
+    logger.info({ pair, timeframe }, 'Data download complete');
+  } catch (err) {
+    logger.warn(
+      { pair, timeframe, error: (err as Error).message },
+      'Data download failed — race will proceed (preflight may catch this)',
+    );
+  }
+}
+
 /**
  * Resolve FreqTrade data directory (OHLCV data).
  */
@@ -353,28 +491,17 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
     throw new Error(`No strategy file at ${agentPath}`);
   }
 
-  // Pre-launch validation: catch environment problems before container start
-  if (!fs.existsSync(FT_CONFIG) || !fs.statSync(FT_CONFIG).isFile()) {
-    const isDir =
-      fs.existsSync(FT_CONFIG) && fs.statSync(FT_CONFIG).isDirectory();
-    throw new Error(
-      `Kata pre-launch failed: FT_CONFIG ${isDir ? 'is a directory' : 'does not exist'}: ${FT_CONFIG}. ` +
-        (isDir
-          ? 'Delete it and create a proper FreqTrade config JSON file.'
-          : ''),
-    );
-  }
-  if (!fs.existsSync(dataDir)) {
-    throw new Error(
-      `Kata pre-launch failed: data directory does not exist: ${dataDir}`,
-    );
-  }
+  const pair = req.pair || 'BTC/USDT:USDT';
+  const timeframe = req.timeframe || '4h';
+
+  // Self-healing: fix environment issues before container launch
+  ensureConfig();
+  normalizeDataPaths(dataDir);
+  ensureData(dataDir, pair, timeframe);
 
   // Clean up existing container
   removeContainer(containerName);
 
-  const pair = req.pair || 'BTC/USDT:USDT';
-  const timeframe = req.timeframe || '4h';
   const maxExperiments = req.max_experiments || 50;
 
   // Build docker run command

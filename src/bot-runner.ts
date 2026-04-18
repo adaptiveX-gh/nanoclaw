@@ -128,6 +128,8 @@ interface BotStatusFile {
   container_name: string;
   api_port: number;
   api_url: string;
+  api_username?: string;
+  api_password?: string;
   signals_active: boolean;
   strategy: string;
   pair: string;
@@ -370,6 +372,8 @@ function writeBotStatus(
     container_name: bot.containerName,
     api_port: bot.port,
     api_url: `http://127.0.0.1:${bot.port}`,
+    api_username: FT_API_USERNAME,
+    api_password: bot.password || undefined,
     signals_active: bot.signalsActive,
     strategy: bot.strategy,
     pair: bot.pair,
@@ -548,6 +552,9 @@ function generateBotConfig(
       order_book_top: 1,
     },
     pairlists: [{ method: 'StaticPairList' }],
+    // tv-manual bots accept only forced entries via the FreqTrade API;
+    // without this flag the /forcebuy endpoint returns 401.
+    force_entry_enable: true,
     api_server: {
       enabled: true,
       listen_ip_address: '0.0.0.0',
