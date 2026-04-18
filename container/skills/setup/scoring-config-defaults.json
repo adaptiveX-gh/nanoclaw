@@ -242,7 +242,10 @@
     "staleness_ll_threshold": -2.0,
     "retrain_interval_days": 30,
     "lookback_bars_training": 2000,
-    "lookback_bars_inference": 100
+    "lookback_bars_inference": 100,
+    "min_bars_for_hmm": 500,
+    "bocpd_threshold": 0.50,
+    "shadow_log_file": "regime-shadow-log.jsonl"
   },
 
   "TV_SIGNALS": {
