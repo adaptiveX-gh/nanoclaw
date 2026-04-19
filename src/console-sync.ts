@@ -295,6 +295,24 @@ function loadCampaigns(): { campaigns: any[]; budget: any | null } {
   return { campaigns: allCampaigns, budget };
 }
 
+function loadRegimeIntel(): any | null {
+  try {
+    if (!fs.existsSync(GROUPS_DIR)) return null;
+    for (const folder of fs.readdirSync(GROUPS_DIR)) {
+      const filePath = path.join(GROUPS_DIR, folder, 'reports', 'regime-intel.json');
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      } catch {
+        // skip malformed files
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function loadTriageMatrix(): any[] {
   const allResults: any[] = [];
   try {
@@ -681,6 +699,7 @@ export async function runConsoleSync(
     cursor,
   );
   const research = loadResearchData();
+  const regimeIntel = loadRegimeIntel();
   const tvSignalSources = loadTvSignalSources();
   const tvSignalLog = loadTvSignalLog();
 
@@ -703,6 +722,7 @@ export async function runConsoleSync(
     cell_grid: research.cellGrid,
     missed_opportunities: research.missedOpportunities,
     triage_matrix: triageMatrix,
+    regime_intel: regimeIntel,
     tv_signal_sources: tvSignalSources,
     tv_signal_log: tvSignalLog,
   };
