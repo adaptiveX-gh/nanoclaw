@@ -55,6 +55,12 @@ describe('credential-proxy', () => {
 
     upstreamServer = http.createServer((req, res) => {
       lastUpstreamHeaders = { ...req.headers };
+      // Return a temp API key for OAuth exchange requests
+      if (req.url === '/api/oauth/claude_cli/create_api_key') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ api_key: 'sk-ant-temp-from-exchange' }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -141,6 +147,31 @@ describe('credential-proxy', () => {
 
     expect(lastUpstreamHeaders['x-api-key']).toBe('temp-key-from-exchange');
     expect(lastUpstreamHeaders['authorization']).toBeUndefined();
+  });
+
+  it('OAuth mode replaces x-api-key placeholder with exchanged temp key', async () => {
+    proxyPort = await startProxy({
+      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
+    });
+
+    // Wait for the async OAuth exchange to complete
+    await new Promise((r) => setTimeout(r, 200));
+
+    // SDK container sends x-api-key: placeholder (like Python anthropic.Anthropic())
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-temp-from-exchange');
   });
 
   it('strips hop-by-hop headers', async () => {

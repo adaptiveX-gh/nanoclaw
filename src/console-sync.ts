@@ -299,7 +299,12 @@ function loadRegimeIntel(): any | null {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return null;
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const filePath = path.join(GROUPS_DIR, folder, 'reports', 'regime-intel.json');
+      const filePath = path.join(
+        GROUPS_DIR,
+        folder,
+        'reports',
+        'regime-intel.json',
+      );
       if (!fs.existsSync(filePath)) continue;
       try {
         return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
