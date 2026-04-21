@@ -38,7 +38,13 @@ const kataEnv = readEnvFile([
   'KATA_RUNNER_MAX_RACES',
   'KATA_RUNNER_KATA_DIR',
   'KATA_RUNNER_FT_CONFIG',
+  'KATA_MODE',
 ]);
+
+// KATA_MODE: 'script' (default) uses iterate_container.py,
+//            'agent' uses Claude Code agent with kata-mcp tools
+const KATA_MODE =
+  process.env.KATA_MODE || kataEnv.KATA_MODE || 'script';
 
 const POLL_MS = 5_000;
 const MONITOR_MS = 30_000;
@@ -98,6 +104,7 @@ interface RaceInstance {
 interface RaceStatusFile {
   race_id: string;
   status: 'running' | 'graduated' | 'stopped' | 'failed';
+  kata_mode: string;
   container_name: string;
   candidate_name: string;
   target: { archetype: string; pair: string; timeframe: string };
@@ -183,6 +190,7 @@ function writeRaceStatus(
   const statusFile: RaceStatusFile = {
     race_id: race.raceId,
     status: race.status,
+    kata_mode: KATA_MODE,
     container_name: race.containerName,
     candidate_name: race.candidateName,
     target: {
@@ -523,54 +531,130 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
   removeContainer(containerName);
 
   const maxExperiments = req.max_experiments || 50;
+  const kataMode = KATA_MODE;
 
-  // Build docker run command
-  // --entrypoint overrides the image's Node.js entrypoint so we can run Python directly
-  const dockerArgs = [
-    'run',
-    '-d',
-    '--name',
-    containerName,
-    '--entrypoint',
-    'python3',
-    // No --restart: kata containers are finite-duration jobs
-    '-v',
-    `${raceDir}:/workspace/race`,
-    '-v',
-    `${dataDir}:/freqtrade/user_data/data:ro`,
-    '-v',
-    `${knowledgeDir}:/workspace/knowledge`,
-    '-v',
-    `${KATA_DIR}:/app/kata:ro`,
-    '-v',
-    `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-    '-e',
-    'ANTHROPIC_API_KEY=placeholder',
-    '-e',
-    `TARGET_PAIR=${pair}`,
-    '-e',
-    `TARGET_TIMEFRAME=${timeframe}`,
-    ...hostGatewayArgs(),
-    CONTAINER_IMAGE,
-    '/app/kata/iterate_container.py',
-    '--race-dir',
-    '/workspace/race',
-    '--data-dir',
-    '/freqtrade/user_data/data',
-    '--knowledge-dir',
-    '/workspace/knowledge',
-    '--max-experiments',
-    String(maxExperiments),
-    '--target-pair',
-    pair,
-    '--target-timeframe',
-    timeframe,
+  // Common volume mounts for both modes
+  const commonMounts = [
+    '-v', `${raceDir}:/workspace/race`,
+    '-v', `${dataDir}:/freqtrade/user_data/data:ro`,
+    '-v', `${knowledgeDir}:/workspace/knowledge`,
+    '-v', `${KATA_DIR}:/app/kata:ro`,
+    '-v', `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
   ];
 
+  // Common env vars
+  const commonEnv = [
+    '-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    '-e', 'ANTHROPIC_API_KEY=placeholder',
+    '-e', `TARGET_PAIR=${pair}`,
+    '-e', `TARGET_TIMEFRAME=${timeframe}`,
+  ];
+
+  let dockerArgs: string[];
+
+  if (kataMode === 'agent') {
+    // Agent mode: use Claude Code agent-runner with kata-mcp tools.
+    // Write ContainerInput JSON for the agent-runner to read via stdin.
+    const archetype = req.archetype || 'UNKNOWN';
+    const initialPrompt = [
+      `You are running a kata race to improve a trading strategy.`,
+      ``,
+      `## Race context`,
+      `- Archetype: ${archetype}`,
+      `- Pair: ${pair}`,
+      `- Timeframe: ${timeframe}`,
+      `- Max experiments: ${maxExperiments}`,
+      `- Strategy file: /workspace/race/agent.py`,
+      ``,
+      `## Instructions`,
+      `Follow the kata-agent skill instructions. Start by reading agent.py,`,
+      `loading knowledge for ${archetype}, and running a baseline benchmark.`,
+      `Then iterate: investigate, edit, benchmark, keep/revert, record.`,
+      ``,
+      `Stop when graduated (score >= 0.5 with DSR/PBO gates passed) or`,
+      `after ${maxExperiments} experiments.`,
+    ].join('\n');
+
+    const containerInput = {
+      prompt: initialPrompt,
+      groupFolder: 'kata',
+      chatJid: `kata-${raceId}`,
+      isMain: false,
+      isScheduledTask: true, // one-shot: exit after the query
+      model: 'claude-sonnet-4-6',
+      capabilities: 'kata',
+    };
+
+    // Write input JSON to race dir so the container can read it
+    const inputPath = path.join(raceDir, 'agent-input.json');
+    fs.writeFileSync(inputPath, JSON.stringify(containerInput, null, 2));
+
+    // Also write CLAUDE.md to race dir (acts as /workspace/group/CLAUDE.md)
+    // Load the kata-agent SKILL.md content from the skills directory
+    const skillPath = path.join(KATA_DIR, '..', 'skills', 'kata-agent', 'SKILL.md');
+    let skillContent = '';
+    try {
+      skillContent = fs.readFileSync(skillPath, 'utf-8');
+    } catch {
+      // Fallback: try the KATA_DIR parent's skills dir
+      const fallbackPath = path.resolve(KATA_DIR, '..', 'skills', 'kata-agent', 'SKILL.md');
+      try {
+        skillContent = fs.readFileSync(fallbackPath, 'utf-8');
+      } catch {
+        logger.warn({ skillPath }, 'Could not find kata-agent SKILL.md');
+      }
+    }
+
+    // Write CLAUDE.md to race dir, then mount it into /workspace/group/
+    // where the agent-runner's query() cwd will find it.
+    const claudeMdPath = path.join(raceDir, 'CLAUDE.md');
+    if (skillContent) {
+      fs.writeFileSync(claudeMdPath, skillContent);
+    }
+
+    dockerArgs = [
+      'run',
+      '-d',
+      '--name', containerName,
+      '--entrypoint', 'sh',
+      ...commonMounts,
+      ...(skillContent ? ['-v', `${claudeMdPath}:/workspace/group/CLAUDE.md:ro`] : []),
+      ...commonEnv,
+      '-e', `KATA_RACE_DIR=/workspace/race`,
+      '-e', `KATA_DATA_DIR=/freqtrade/user_data/data`,
+      '-e', `KATA_KNOWLEDGE_DIR=/workspace/knowledge`,
+      '-e', `KATA_CONFIG_PATH=/freqtrade/user_data/config.json`,
+      '-e', `KATA_SOURCE_DIR=/app/kata`,
+      '-e', `KATA_MAX_EXPERIMENTS=${maxExperiments}`,
+      '-e', `KATA_MODE=agent`,
+      ...hostGatewayArgs(),
+      CONTAINER_IMAGE,
+      '-c',
+      'cat /workspace/race/agent-input.json | node /app/dist/index.js',
+    ];
+  } else {
+    // Script mode (default): use iterate_container.py directly
+    dockerArgs = [
+      'run',
+      '-d',
+      '--name', containerName,
+      '--entrypoint', 'python3',
+      ...commonMounts,
+      ...commonEnv,
+      ...hostGatewayArgs(),
+      CONTAINER_IMAGE,
+      '/app/kata/iterate_container.py',
+      '--race-dir', '/workspace/race',
+      '--data-dir', '/freqtrade/user_data/data',
+      '--knowledge-dir', '/workspace/knowledge',
+      '--max-experiments', String(maxExperiments),
+      '--target-pair', pair,
+      '--target-timeframe', timeframe,
+    ];
+  }
+
   logger.info(
-    { raceId, containerName, pair, timeframe, maxExperiments },
+    { raceId, containerName, pair, timeframe, maxExperiments, kataMode },
     'Starting kata race container',
   );
 
@@ -949,6 +1033,7 @@ export function startKataRunner(): void {
       racesDir: RACES_DIR,
       maxRaces: MAX_RACES,
       kataDir: KATA_DIR,
+      kataMode: KATA_MODE,
     },
     'Kata runner started',
   );

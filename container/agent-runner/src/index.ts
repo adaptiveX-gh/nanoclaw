@@ -19,7 +19,7 @@ import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
-type CapabilityProfile = 'core' | 'research' | 'trading' | 'full';
+type CapabilityProfile = 'core' | 'research' | 'trading' | 'full' | 'kata';
 
 interface ContainerInput {
   prompt: string;
@@ -343,6 +343,7 @@ const CAPABILITY_SERVERS: Record<CapabilityProfile, Set<string>> = {
   research: new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'youtube']),
   trading:  new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'aphexdata', 'botrunner', 'katarunner', 'youtube']),
   full:     new Set(['nanoclaw', 'orderflow', 'freqtrade', 'aphexdna', 'aphexdata', 'botrunner', 'katarunner', 'x', 'luxalgo', 'youtube', 'debug']),
+  kata:     new Set(['katamcp']),
 };
 
 /**
@@ -484,6 +485,22 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
       env: {
         NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
         NANOCLAW_IS_MAIN: '1',
+      },
+    };
+  }
+
+  // katamcp: kata strategy improvement tools — benchmarking, market inspection, knowledge
+  if (enabled.has('katamcp')) {
+    servers.katamcp = {
+      command: 'python3',
+      args: ['/app/kata-mcp/__main__.py'],
+      env: {
+        KATA_RACE_DIR: process.env.KATA_RACE_DIR || '/workspace/race',
+        KATA_DATA_DIR: process.env.KATA_DATA_DIR || '/freqtrade/user_data/data',
+        KATA_KNOWLEDGE_DIR: process.env.KATA_KNOWLEDGE_DIR || '/workspace/knowledge',
+        KATA_CONFIG_PATH: process.env.KATA_CONFIG_PATH || '/freqtrade/user_data/config.json',
+        KATA_SOURCE_DIR: process.env.KATA_SOURCE_DIR || '/app/kata',
+        KATA_MAX_EXPERIMENTS: process.env.KATA_MAX_EXPERIMENTS || '15',
       },
     };
   }

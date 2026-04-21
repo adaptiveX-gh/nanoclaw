@@ -49,7 +49,11 @@ RUN ln -s /workspace/group/.chub /home/node/.chub
 
 # Install freqtrade-mcp Python server and dependencies
 COPY freqtrade-mcp/ /app/freqtrade-mcp/
-RUN pip install --break-system-packages "freqtrade[hyperopt]" freqtrade-client "mcp[cli]" ta anthropic
+RUN pip install --break-system-packages "freqtrade[hyperopt]" freqtrade-client "mcp[cli]" ta anthropic pandas
+
+# Install kata-mcp server (strategy improvement: benchmarking, market inspection, knowledge)
+COPY kata-mcp/ /app/kata-mcp/
+RUN pip install --break-system-packages /app/kata-mcp
 
 # Install aphexdna-core MCP server (genome lifecycle: create, fork, compile, attest, register)
 # Python `sdna` CLI entry point gets overwritten by FreqHub's npm link below — that's intentional.

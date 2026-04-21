@@ -28,22 +28,18 @@ export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
 ): Promise<Server> {
-  const secrets = readEnvFile([
-    'ANTHROPIC_API_KEY',
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_AUTH_TOKEN',
-    'ANTHROPIC_BASE_URL',
-  ]);
-
-  const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-  const oauthToken =
-    secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
-
+  // Read upstream URL once at startup (doesn't change at runtime)
+  const initSecrets = readEnvFile(['ANTHROPIC_BASE_URL']);
   const upstreamUrl = new URL(
-    secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+    initSecrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
   );
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
+
+  // Detect initial auth mode for startup log
+  const initAuthMode = readEnvFile(['ANTHROPIC_API_KEY']).ANTHROPIC_API_KEY
+    ? 'api-key'
+    : 'oauth';
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
@@ -51,6 +47,21 @@ export function startCredentialProxy(
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
         const body = Buffer.concat(chunks);
+
+        // Re-read credentials on each request — picks up refreshed OAuth
+        // tokens without requiring a proxy restart. The .env file is <1KB;
+        // this read is negligible compared to the HTTPS proxy overhead.
+        const secrets = readEnvFile([
+          'ANTHROPIC_API_KEY',
+          'CLAUDE_CODE_OAUTH_TOKEN',
+          'ANTHROPIC_AUTH_TOKEN',
+        ]);
+        const authMode: AuthMode = secrets.ANTHROPIC_API_KEY
+          ? 'api-key'
+          : 'oauth';
+        const oauthToken =
+          secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
+
         const headers: Record<string, string | number | string[] | undefined> =
           {
             ...(req.headers as Record<string, string>),
@@ -119,7 +130,7 @@ export function startCredentialProxy(
     });
 
     server.listen(port, host, () => {
-      logger.info({ port, host, authMode }, 'Credential proxy started');
+      logger.info({ port, host, authMode: initAuthMode }, 'Credential proxy started');
       resolve(server);
     });
 
