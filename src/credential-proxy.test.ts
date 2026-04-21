@@ -139,7 +139,9 @@ describe('credential-proxy', () => {
       '{}',
     );
 
-    expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-temp-key-from-cli-exchange');
+    expect(lastUpstreamHeaders['x-api-key']).toBe(
+      'sk-ant-temp-key-from-cli-exchange',
+    );
     expect(lastUpstreamHeaders['authorization']).toBeUndefined();
   });
 
@@ -164,7 +166,9 @@ describe('credential-proxy', () => {
 
     // Proxy strips placeholder x-api-key and injects Bearer token
     expect(lastUpstreamHeaders['x-api-key']).toBeUndefined();
-    expect(lastUpstreamHeaders['authorization']).toBe('Bearer real-oauth-token');
+    expect(lastUpstreamHeaders['authorization']).toBe(
+      'Bearer real-oauth-token',
+    );
   });
 
   it('strips hop-by-hop headers', async () => {

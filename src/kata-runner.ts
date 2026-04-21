@@ -43,8 +43,7 @@ const kataEnv = readEnvFile([
 
 // KATA_MODE: 'script' (default) uses iterate_container.py,
 //            'agent' uses Claude Code agent with kata-mcp tools
-const KATA_MODE =
-  process.env.KATA_MODE || kataEnv.KATA_MODE || 'script';
+const KATA_MODE = process.env.KATA_MODE || kataEnv.KATA_MODE || 'script';
 
 const POLL_MS = 5_000;
 const MONITOR_MS = 30_000;
@@ -535,19 +534,28 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
 
   // Common volume mounts for both modes
   const commonMounts = [
-    '-v', `${raceDir}:/workspace/race`,
-    '-v', `${dataDir}:/freqtrade/user_data/data:ro`,
-    '-v', `${knowledgeDir}:/workspace/knowledge`,
-    '-v', `${KATA_DIR}:/app/kata:ro`,
-    '-v', `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
+    '-v',
+    `${raceDir}:/workspace/race`,
+    '-v',
+    `${dataDir}:/freqtrade/user_data/data:ro`,
+    '-v',
+    `${knowledgeDir}:/workspace/knowledge`,
+    '-v',
+    `${KATA_DIR}:/app/kata:ro`,
+    '-v',
+    `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
   ];
 
   // Common env vars
   const commonEnv = [
-    '-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-    '-e', 'ANTHROPIC_API_KEY=placeholder',
-    '-e', `TARGET_PAIR=${pair}`,
-    '-e', `TARGET_TIMEFRAME=${timeframe}`,
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    '-e',
+    'ANTHROPIC_API_KEY=placeholder',
+    '-e',
+    `TARGET_PAIR=${pair}`,
+    '-e',
+    `TARGET_TIMEFRAME=${timeframe}`,
   ];
 
   let dockerArgs: string[];
@@ -591,13 +599,25 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
 
     // Also write CLAUDE.md to race dir (acts as /workspace/group/CLAUDE.md)
     // Load the kata-agent SKILL.md content from the skills directory
-    const skillPath = path.join(KATA_DIR, '..', 'skills', 'kata-agent', 'SKILL.md');
+    const skillPath = path.join(
+      KATA_DIR,
+      '..',
+      'skills',
+      'kata-agent',
+      'SKILL.md',
+    );
     let skillContent = '';
     try {
       skillContent = fs.readFileSync(skillPath, 'utf-8');
     } catch {
       // Fallback: try the KATA_DIR parent's skills dir
-      const fallbackPath = path.resolve(KATA_DIR, '..', 'skills', 'kata-agent', 'SKILL.md');
+      const fallbackPath = path.resolve(
+        KATA_DIR,
+        '..',
+        'skills',
+        'kata-agent',
+        'SKILL.md',
+      );
       try {
         skillContent = fs.readFileSync(fallbackPath, 'utf-8');
       } catch {
@@ -615,18 +635,29 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
     dockerArgs = [
       'run',
       '-d',
-      '--name', containerName,
-      '--entrypoint', 'sh',
+      '--name',
+      containerName,
+      '--entrypoint',
+      'sh',
       ...commonMounts,
-      ...(skillContent ? ['-v', `${claudeMdPath}:/workspace/group/CLAUDE.md:ro`] : []),
+      ...(skillContent
+        ? ['-v', `${claudeMdPath}:/workspace/group/CLAUDE.md:ro`]
+        : []),
       ...commonEnv,
-      '-e', `KATA_RACE_DIR=/workspace/race`,
-      '-e', `KATA_DATA_DIR=/freqtrade/user_data/data`,
-      '-e', `KATA_KNOWLEDGE_DIR=/workspace/knowledge`,
-      '-e', `KATA_CONFIG_PATH=/freqtrade/user_data/config.json`,
-      '-e', `KATA_SOURCE_DIR=/app/kata`,
-      '-e', `KATA_MAX_EXPERIMENTS=${maxExperiments}`,
-      '-e', `KATA_MODE=agent`,
+      '-e',
+      `KATA_RACE_DIR=/workspace/race`,
+      '-e',
+      `KATA_DATA_DIR=/freqtrade/user_data/data`,
+      '-e',
+      `KATA_KNOWLEDGE_DIR=/workspace/knowledge`,
+      '-e',
+      `KATA_CONFIG_PATH=/freqtrade/user_data/config.json`,
+      '-e',
+      `KATA_SOURCE_DIR=/app/kata`,
+      '-e',
+      `KATA_MAX_EXPERIMENTS=${maxExperiments}`,
+      '-e',
+      `KATA_MODE=agent`,
       ...hostGatewayArgs(),
       CONTAINER_IMAGE,
       '-c',
@@ -637,19 +668,27 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
     dockerArgs = [
       'run',
       '-d',
-      '--name', containerName,
-      '--entrypoint', 'python3',
+      '--name',
+      containerName,
+      '--entrypoint',
+      'python3',
       ...commonMounts,
       ...commonEnv,
       ...hostGatewayArgs(),
       CONTAINER_IMAGE,
       '/app/kata/iterate_container.py',
-      '--race-dir', '/workspace/race',
-      '--data-dir', '/freqtrade/user_data/data',
-      '--knowledge-dir', '/workspace/knowledge',
-      '--max-experiments', String(maxExperiments),
-      '--target-pair', pair,
-      '--target-timeframe', timeframe,
+      '--race-dir',
+      '/workspace/race',
+      '--data-dir',
+      '/freqtrade/user_data/data',
+      '--knowledge-dir',
+      '/workspace/knowledge',
+      '--max-experiments',
+      String(maxExperiments),
+      '--target-pair',
+      pair,
+      '--target-timeframe',
+      timeframe,
     ];
   }
 
