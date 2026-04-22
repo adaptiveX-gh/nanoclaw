@@ -49,7 +49,7 @@ RUN ln -s /workspace/group/.chub /home/node/.chub
 
 # Install freqtrade-mcp Python server and dependencies
 COPY freqtrade-mcp/ /app/freqtrade-mcp/
-RUN pip install --break-system-packages "freqtrade[hyperopt]" freqtrade-client "mcp[cli]" ta anthropic pandas
+RUN pip install --break-system-packages "freqtrade[hyperopt]" freqtrade-client "mcp[cli]" ta anthropic pandas hmmlearn
 
 # Install kata-mcp server (strategy improvement: benchmarking, market inspection, knowledge)
 COPY kata-mcp/ /app/kata-mcp/
