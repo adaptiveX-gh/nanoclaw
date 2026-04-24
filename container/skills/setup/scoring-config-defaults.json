@@ -136,7 +136,11 @@
   },
 
   "CIRCUIT_BREAKER": {
-    "dd_threshold_pct": 15
+    "dd_alert_pct": 5,
+    "dd_pause_pct": 10,
+    "dd_flat_pct": 15,
+    "dd_cooloff_hours": 48,
+    "negative_alpha_flag_hours": 48
   },
 
   "SENTIMENT_MULTIPLIER": {
