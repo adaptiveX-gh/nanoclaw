@@ -347,6 +347,7 @@ function buildContainerArgs(
     'TRADINGVIEW_SESSION_ID',
     'TRADINGVIEW_SESSION_ID_SIGN',
     'FINNHUB_API_KEY',
+    'COMPETITION_END_DATE',
   ];
   const envValues = readEnvFile(allEnvKeys);
 
@@ -393,6 +394,10 @@ function buildContainerArgs(
   // Forward Orderflow API URL (no auth needed, public API)
   const ofUrl = envVal('ORDERFLOW_API_URL');
   if (ofUrl) args.push('-e', `ORDERFLOW_API_URL=${ofUrl}`);
+
+  // Competition mode end date (auto-disable safeguard)
+  const compEnd = envVal('COMPETITION_END_DATE');
+  if (compEnd) args.push('-e', `COMPETITION_END_DATE=${compEnd}`);
 
   // TV Signals (TradingView webhook processing)
   const tvRequiredKeys = [
