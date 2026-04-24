@@ -115,6 +115,90 @@ False RSI oversold signals during extended downtrends. Volume gate helps but doe
 - **User indicators**: Reference with `{name}` curly braces
 - **Custom indicators** (v0.2): Python `@indicator` modules in `indicators/` subdirectory
 
+## TRADE.md Editing Workflow
+
+### Orient before you edit
+
+Before proposing any change, load the strategy's identity:
+
+```bash
+trade-md explain path/to/TRADE.md
+```
+
+The output gives thesis, market, entry/exit logic, risk profile, disable
+conditions, and provenance in ~25 lines. Important details in prose sections
+(kata lineage notes, known failure modes) may require scanning the full file.
+
+Why this matters: most bad strategy edits come from not understanding why a
+parameter is its current value. A stoploss of `-0.03` on a 5m mean-reversion
+strategy is tuned to sit below the first ROI step of 4%. Shift one and you
+probably need to shift the other.
+
+### The canonical edit loop
+
+Every change follows these four steps. Don't skip lint even for one-line changes.
+
+```bash
+# 1. Edit TRADE.md (never the .py — it's a build artifact)
+# 2. Lint
+trade-md lint path/to/TRADE.md
+# 3. Recompile
+trade-md compile --target freqtrade path/to/TRADE.md -o strategies/<Class>.py
+# 4. Diff (if the change is material)
+trade-md diff path/to/TRADE.md.prev path/to/TRADE.md
+```
+
+If lint returns errors, fix before recompiling. Warnings are for things that
+are usually bugs but occasionally intentional — read them and decide.
+
+### Quick edit vs kata iteration
+
+**Quick edit** (typo, comment, prose fix, equivalent indicator expression):
+bump patch version, run the canonical loop. No backtest required.
+
+**Kata iteration** (any behavioral change — new condition, different indicator
+period, changed stoploss, new protection): full loop with backtest. See the
+"Kata Iteration" workflow below.
+
+### Common edit patterns
+
+**Adjusting risk parameters:**
+- Linter R003 catches first ROI step ≤ |stoploss| — the most common foot-gun
+- Trailing `offset` must be `>= positive`
+- Changing stoploss usually means re-tuning the ROI table
+- A MaxDrawdown protection threshold below historical max DD causes immediate disabling
+
+**Adding a new indicator:**
+Define in `indicators:` with a descriptive name, reference as `{name}` in
+conditions. Named indicators make diffs meaningful — `{oversold_threshold}`
+reads better than inline `rsi(14) < 30`.
+
+**Extending entry/exit conditions:**
+Conditions within a signal block are ANDed. For OR, use `or` within a single
+string: `"rsi(14) > 70 or close < ema(50)"`. The compiler converts Python
+`and`/`or` to pandas bitwise `&`/`|`.
+
+For higher timeframe confirmation: `close@1h > ema(50)@1h`. Declare the
+timeframe in `market.informative_timeframes` — linter R004 catches omissions.
+
+**Porting Pine Script / LuxAlgo indicators:**
+1. Identify the computation, translate to DSL (`ema`, `rsi`, `bb_upper`, etc.)
+2. If the DSL lacks it, express via primitives (rolling, shift, pct_change,
+   arithmetic) and declare in `indicators:`
+3. If truly exotic, leave a TODO in prose — don't hand-inject into the .py
+
+**Debugging a losing strategy:**
+Run `trade-md explain` first. If disable conditions would have tripped, the
+question is why the monitor isn't disabling it (runtime bug, not strategy bug).
+If not, the edge has degraded — create a new kata iteration.
+
+### Rules
+
+- Never edit the compiled `.py` directly — changes silently wiped on recompile
+- Never bump MAJOR/MINOR without a `## Kata lineage` prose note
+- Never skip the lint step — R003 and R004 catch real bugs
+- Never touch a strategy with `graduation_status: live` without a ticket
+
 ## trade-md CLI (4 commands)
 
 ```bash

@@ -58,6 +58,28 @@ favorable_sharpe >= 0.5 so it qualifies for paper trading deployment.
 - **Investigation budget.** You get 5 tool calls per experiment for investigation.
   After that, you must propose a change or record a skip.
 
+## Parallel research (when teams available)
+
+After launching a benchmark (step 3 or step 10), you have 10-40 minutes
+of idle time. Use it productively:
+
+1. Spawn a researcher teammate:
+   ```
+   "While I wait for the benchmark, analyze the last experiment's
+    traces in experiments/exp_{N}/traces.json. Cross-reference with
+    knowledge/patterns/{ARCHETYPE}.md. Identify the top 3 candidate
+    changes for the next experiment based on the current obstacle.
+    Focus on changes marked [PROVEN] or [CONFIRMED] in the playbook."
+   ```
+2. When the benchmark completes, read the researcher's findings
+   before making your diagnosis. This eliminates redundant analysis
+   and surfaces cross-race patterns you might miss.
+3. Dismiss the researcher after each benchmark cycle — spawn a
+   fresh one for the next wait period (keeps context clean).
+
+This is optional — if teams aren't available, proceed with the
+standard sequential loop. No functionality is lost.
+
 ## Atomic change taxonomy (what "ONE change" means)
 
 Exactly one of:
