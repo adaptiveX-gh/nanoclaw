@@ -62,16 +62,33 @@ No TypeScript changes needed — this is a prompt-only orchestration skill.
 
 ## Phase 3: Configure
 
-### Schedule the monitoring cycle
+### Schedule the monitoring tasks
 
-Ask the agent to schedule a recurring task:
+The monitor pipeline runs as 4 independent scheduled tasks. Ask the
+agent to schedule each one:
+
 ```
-"Schedule an auto-mode health check to run every 15 minutes"
+"Schedule the monitor health check, deploy, kata, and portfolio tasks"
 ```
 
-The agent will use `schedule_task` to set up:
+The agent will use `schedule_task` for each:
+
 ```
-schedule_task(name: "auto_mode_check", schedule: "*/15 * * * *", context_mode: "isolated", prompt: "Run an auto-mode monitoring check. Read all state files from /workspace/group/auto-mode/, read the latest cell grid from /workspace/group/reports/cell-grid-latest.json, check active deployment health via freqtrade, apply lifecycle transitions, write updated state, and message the user ONLY on state changes.")
+# Health check — every 15 min (fast-path: bot status, signals, retirement, graduation)
+schedule_task(name: "monitor_health_check", schedule: "*/15 * * * *", context_mode: "isolated",
+  prompt: "Run a monitor health check. Use the monitor-health skill: tick init, read state, refresh regimes, update metrics, check retirements (Triggers A-J), check graduations, log and sync. Message user only on state changes.")
+
+# Deployment — every 30 min (slot allocation with backtest verification)
+schedule_task(name: "monitor_deploy", schedule: "7,37 * * * *", context_mode: "isolated",
+  prompt: "Run monitor deployment check. Use the monitor-deploy skill: count slots, gather candidates, rank, verify with backtests (max 3), deploy as trials. Skip if slots full or cell-grid stale.")
+
+# Kata — hourly (kata race completion handler)
+schedule_task(name: "monitor_kata", schedule: "20 * * * *", context_mode: "isolated",
+  prompt: "Run monitor kata check. Use the monitor-kata skill: check for completed kata races, run walk-forward validation, deploy if promising. Skip if no active races.")
+
+# Portfolio — daily at 00:00 UTC (correlation, tail risk, daily rollup)
+schedule_task(name: "monitor_portfolio", schedule: "0 0 * * *", context_mode: "isolated",
+  prompt: "Run monitor portfolio analysis. Use the monitor-portfolio skill: compute portfolio correlation, regime transitions (Sunday), tail risk CVaR, portfolio diagnosis, competition benchmark, experiment ledger review, daily briefing.")
 ```
 
 ### Restart the service
