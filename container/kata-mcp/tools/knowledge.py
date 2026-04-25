@@ -328,7 +328,7 @@ async def kata_record_experiment(
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     if agent_py.exists():
-        shutil.copy2(agent_py, exp_dir / "agent.py")
+        shutil.copy(agent_py, exp_dir / "agent.py")
 
     reasoning = {
         "obstacle": obstacle,
@@ -386,9 +386,9 @@ async def kata_record_experiment(
     # Update snapshot (if keeping) or revert (if not)
     # ---------------------------------------------------------------------------
     if kept and agent_py.exists():
-        shutil.copy2(agent_py, snapshot)
+        shutil.copy(agent_py, snapshot)
     elif not kept and snapshot.exists():
-        shutil.copy2(snapshot, agent_py)
+        shutil.copy(snapshot, agent_py)
 
     # ---------------------------------------------------------------------------
     # Update kata-state.json
