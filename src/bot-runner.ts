@@ -430,9 +430,7 @@ function ftApiCall(
         headers: {
           Authorization: `Basic ${auth}`,
           'Content-Type': 'application/json',
-          ...(bodyStr
-            ? { 'Content-Length': Buffer.byteLength(bodyStr) }
-            : {}),
+          ...(bodyStr ? { 'Content-Length': Buffer.byteLength(bodyStr) } : {}),
         },
         timeout: 10_000,
       },
