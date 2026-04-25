@@ -206,8 +206,7 @@ export class GroupQueue {
    */
   closeStdin(groupJid: string, slot: 'message' | 'task' = 'message'): void {
     const state = this.getGroup(groupJid);
-    const active =
-      slot === 'task' ? state.taskActive : state.messageActive;
+    const active = slot === 'task' ? state.taskActive : state.messageActive;
     const folder =
       slot === 'task' ? state.taskGroupFolder : state.messageGroupFolder;
     if (!active || !folder) return;
