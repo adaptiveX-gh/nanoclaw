@@ -426,6 +426,76 @@ For each running bot (from `bot_list()`):
     Post: "Orphan auto-retired: {strategy}. No campaign after 48h."
     `aphexdata_record_event(verb_id="orphan_auto_retired", verb_category="execution", object_type="deployment", ...)`
 
+**State file reconciliation (campaigns ↔ deployments ↔ roster):**
+
+After reading all state files, check for contradictions between
+campaigns.json and deployments.json. Any mismatch is healed in-place
+and logged. This catches propagation omissions — if a writer updates
+campaigns.json but forgets deployments.json, this pass fixes it within
+one tick (15 minutes). The pass is idempotent and non-blocking.
+
+```
+deployments_changed = false
+roster_changed = false
+
+# 1. Reconcile campaigns → deployments (slot_state, state, graduated)
+for campaign in campaigns where state not in {"pending_deploy"}:
+  dep = find in deployments.deployments
+        where id == campaign.paper_trading.bot_deployment_id
+  if not dep: continue
+
+  # slot_state sync (Bug 5 class — graduation propagation)
+  if campaign.slot_state and dep.slot_state != campaign.slot_state:
+    Log: "RECONCILE: {campaign.strategy} slot_state
+          dep={dep.slot_state} → campaign={campaign.slot_state}"
+    dep.slot_state = campaign.slot_state
+    if campaign.slot_state == "graduated" and campaign.graduated_at:
+      dep.graduated = campaign.graduated_at
+    deployments_changed = true
+
+  # state sync (Bug 3 class — retirement propagation)
+  if campaign.state == "retired" and dep.state != "retired":
+    Log: "RECONCILE: {campaign.strategy} state
+          dep={dep.state} → retired"
+    dep.state = "retired"
+    dep.retired_reason = campaign.paper_trading.retire_reason or "reconciled"
+    deployments_changed = true
+
+  # state sync (graduation propagation)
+  if campaign.state in {"graduated_internal_only", "graduated_external"}
+     and dep.state not in {"retired", campaign.state}:
+    Log: "RECONCILE: {campaign.strategy} state
+          dep={dep.state} → {campaign.state}"
+    dep.state = campaign.state
+    deployments_changed = true
+
+if deployments_changed:
+  write auto-mode/deployments.json
+  sync_state_to_supabase(state_key="deployments", ...)
+  Log: "Reconciliation healed deployments.json"
+
+# 2. Reconcile roster → deployments (retired cell coverage)
+roster = read auto-mode/roster.json (gracefully skip if missing)
+if roster:
+  for r in roster.roster:
+    for cell in (r.cells or []):
+      if cell.status == "paper_trading":
+        # Find matching deployment — if retired, roster is stale
+        dep = find in deployments.deployments
+              where strategy == r.strategy_name
+              and pairs contains cell.pair
+              and state == "retired"
+        if dep:
+          cell.status = "retired"
+          roster_changed = true
+          Log: "RECONCILE: roster {r.strategy_name} {cell.pair} → retired"
+
+  if roster_changed:
+    write auto-mode/roster.json
+    sync_state_to_supabase(state_key="roster", ...)
+    Log: "Reconciliation healed roster.json"
+```
+
 ### Step 2: REFRESH REGIMES
 
 Read market-timing scores for each cell.
@@ -1697,6 +1767,15 @@ campaign.graduation = {
   internal_bridge_until: now + 3 days,
 }
 
+# Update authoritative slot state (deployments.json is what the slot counter reads)
+dep = find in deployments.deployments where id == campaign.paper_trading.bot_deployment_id
+if dep:
+  dep.slot_state = campaign.slot_state          # "graduated" (set by Trigger H or early grad)
+  dep.state = "graduated_internal_only"
+  dep.graduated = now
+  write auto-mode/deployments.json
+  sync_state_to_supabase(state_key="deployments", ...)
+
 Write header tags to strategy .py:
   # ARCHETYPE: {archetype}
   # GRADUATED: {date}
@@ -1735,6 +1814,12 @@ for campaign in campaigns where state == "graduated_internal_only":
   if now >= campaign.graduation.internal_bridge_until:
     if current_sharpe >= 0.5 AND no new retirement triggers fired during bridge:
       campaign.state = "graduated_external"
+      # Propagate external graduation to deployments.json
+      dep = find in deployments.deployments where id == campaign.paper_trading.bot_deployment_id
+      if dep:
+        dep.state = "graduated_external"
+        write auto-mode/deployments.json
+        sync_state_to_supabase(state_key="deployments", ...)
       If live_sharpe >= 0.8:
         Enable marketplace signal publishing
         Post: "PUBLISHED: {strategy} — Sharpe {s} exceeds publishing threshold"
@@ -1762,6 +1847,27 @@ dep.state = "retired"
 dep.retired_reason = reason
 write auto-mode/deployments.json
 sync_state_to_supabase(state_key="deployments", ...)
+
+# Update roster.json cell status (roster tracks pre-staged deployment state)
+roster = read auto-mode/roster.json (gracefully skip if missing)
+if roster:
+  changed = false
+  for r in roster.roster:
+    if r.strategy_name != campaign.strategy: continue
+    for cell in (r.cells or []):
+      if cell.pair == campaign.pair and (cell.timeframe or r.timeframe) == campaign.timeframe:
+        if cell.status != "retired":
+          cell.status = "retired"
+          cell.last_deactivated = now
+          changed = true
+    # Handle flat roster entries (no cells array)
+    if not r.cells and r.pair == campaign.pair and r.timeframe == campaign.timeframe:
+      if r.status != "retired":
+        r.status = "retired"
+        changed = true
+  if changed:
+    write auto-mode/roster.json
+    sync_state_to_supabase(state_key="roster", ...)
 
 Update TRADE.md on retirement:
   TRADE_MD="/workspace/group/strategies/${strategy_name}.trade.md"
