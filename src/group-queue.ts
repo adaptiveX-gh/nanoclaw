@@ -202,18 +202,17 @@ export class GroupQueue {
   }
 
   /**
-   * Signal the active message container to wind down by writing a close sentinel.
+   * Signal the active container to wind down by writing a close sentinel.
    */
-  closeStdin(groupJid: string): void {
+  closeStdin(groupJid: string, slot: 'message' | 'task' = 'message'): void {
     const state = this.getGroup(groupJid);
-    if (!state.messageActive || !state.messageGroupFolder) return;
+    const active =
+      slot === 'task' ? state.taskActive : state.messageActive;
+    const folder =
+      slot === 'task' ? state.taskGroupFolder : state.messageGroupFolder;
+    if (!active || !folder) return;
 
-    const inputDir = path.join(
-      DATA_DIR,
-      'ipc',
-      state.messageGroupFolder,
-      'input',
-    );
+    const inputDir = path.join(DATA_DIR, 'ipc', folder, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');

@@ -58,11 +58,17 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+interface VolumeMountResult {
+  mounts: VolumeMount[];
+  /** Per-spawn filtered skills directory to clean up after container exits. */
+  filteredSkillsDir?: string;
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
   skillsAllowlist?: string[],
-): VolumeMount[] {
+): VolumeMountResult {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
@@ -190,39 +196,38 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // When a skills allowlist is set, create a filtered directory containing
-  // only the allowed skills and mount it over /home/node/.claude/skills.
+  // When a skills allowlist is set, create a per-spawn filtered directory
+  // containing only the allowed skills and mount it over /home/node/.claude/skills.
   // The more-specific mount overrides the parent .claude mount for that path.
   // This prevents task containers from seeing (and running) unrelated skills.
-  if (skillsAllowlist && skillsAllowlist.length > 0 && fs.existsSync(skillsSrc)) {
-    const filteredDir = path.join(groupSessionsDir, 'skills-filtered');
+  // Each spawn gets its own directory (keyed by timestamp) so concurrent
+  // containers don't overwrite each other's skill sets.
+  let filteredDirToCleanup: string | undefined;
+  if (
+    skillsAllowlist &&
+    skillsAllowlist.length > 0 &&
+    fs.existsSync(skillsSrc)
+  ) {
+    const filteredDir = path.join(
+      groupSessionsDir,
+      `skills-filtered-${Date.now()}`,
+    );
     fs.mkdirSync(filteredDir, { recursive: true });
+    filteredDirToCleanup = filteredDir;
 
     const allowed = new Set(skillsAllowlist);
-    const synced = new Set<string>();
 
     for (const skillName of allowed) {
       const src = path.join(skillsSrc, skillName);
       if (!fs.statSync(src, { throwIfNoEntry: false })?.isDirectory()) {
-        logger.warn({ skill: skillName }, 'Skills allowlist references non-existent skill');
+        logger.warn(
+          { skill: skillName },
+          'Skills allowlist references non-existent skill',
+        );
         continue;
       }
-      synced.add(skillName);
       const dst = path.join(filteredDir, skillName);
-      if (fs.existsSync(dst)) {
-        if (fs.statSync(src).mtimeMs <= fs.statSync(dst).mtimeMs) continue;
-      }
       fs.cpSync(src, dst, { recursive: true });
-    }
-
-    // Remove any skills in the filtered dir that aren't in the allowlist
-    for (const existing of fs.readdirSync(filteredDir)) {
-      if (!synced.has(existing)) {
-        const stale = path.join(filteredDir, existing);
-        if (fs.statSync(stale).isDirectory()) {
-          fs.rmSync(stale, { recursive: true });
-        }
-      }
     }
 
     mounts.push({
@@ -352,7 +357,7 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
-  return mounts;
+  return { mounts, filteredSkillsDir: filteredDirToCleanup };
 }
 
 function buildContainerArgs(
@@ -543,7 +548,11 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain, input.skillsAllowlist);
+  const { mounts, filteredSkillsDir } = buildVolumeMounts(
+    group,
+    input.isMain,
+    input.skillsAllowlist,
+  );
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName, group.folder);
@@ -553,7 +562,7 @@ export async function runContainerAgent(
       group: group.name,
       containerName,
       mounts: mounts.map(
-        (m) =>
+        (m: VolumeMount) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
       containerArgs: containerArgs.join(' '),
@@ -721,6 +730,18 @@ export async function runContainerAgent(
     container.on('close', (code) => {
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
+
+      // Clean up per-spawn filtered skills directory
+      if (filteredSkillsDir && fs.existsSync(filteredSkillsDir)) {
+        try {
+          fs.rmSync(filteredSkillsDir, { recursive: true });
+        } catch (err) {
+          logger.warn(
+            { dir: filteredSkillsDir, err },
+            'Failed to clean up filtered skills dir',
+          );
+        }
+      }
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');

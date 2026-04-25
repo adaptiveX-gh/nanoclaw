@@ -174,7 +174,7 @@ async function runTask(
     if (closeTimer) return; // already scheduled
     closeTimer = setTimeout(() => {
       logger.debug({ taskId: task.id }, 'Closing task container after result');
-      deps.queue.closeStdin(task.chat_jid);
+      deps.queue.closeStdin(task.chat_jid, 'task');
     }, TASK_CLOSE_DELAY_MS);
   };
 
