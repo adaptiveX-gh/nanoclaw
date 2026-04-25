@@ -104,18 +104,16 @@
       "candidate_pipeline_cron": "30 */4 * * *",
       "daily_rollup_cron": "5 */6 * * *",
       "knowledge_aggregation_cron": "30 */6 * * *",
-      "health_check_cron": "*/15 * * * *",
-      "reaper_cron": "*/15 * * * *"
+      "health_check_cron": "*/15 * * * *"
     },
     "normal_cadences": {
-      "_comment": "Reference for what to restore on deactivation.",
+      "_comment": "Reference for what to restore on deactivation. Reaper removed — monitor-health Step 1 reconcile + Trigger B handle dead container detection and retirement.",
       "monitor_cron": "*/15 * * * *",
       "portfolio_risk_cron": "0 * * * *",
       "scout_cron": "0 4 * * *",
       "daily_rollup_cron": "5 0 * * *",
       "knowledge_aggregation_cron": "0 2 * * *",
-      "health_check_cron": "*/30 * * * *",
-      "reaper_cron": "*/30 * * * *"
+      "health_check_cron": "*/30 * * * *"
     },
     "candidate_queue": {
       "max_size": 5,

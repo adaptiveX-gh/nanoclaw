@@ -65,6 +65,7 @@ from Supabase, not from local files. Files to sync:
 | File | state_key |
 |------|-----------|
 | `campaigns.json` | `campaigns` |
+| `deployments.json` | `deployments` |
 | `roster.json` | `roster` |
 | `missed-opportunities.json` | `missed_opps` |
 | `triage-matrix.json` | `triage_matrix` |
@@ -367,9 +368,24 @@ and all proven bots (`campaign.state == "graduated"`).
 
 **Reconcile:** For each campaign with a `paper_trading.bot_deployment_id`,
 verify the container is actually running via `bot_status(deployment_id)`.
-If container is down but campaign says `paper_trading` → log warning,
-don't auto-retire (might be a restart). If container has been down for
-3+ consecutive checks, attempt `bot_start()` to restart it.
+
+```
+cfg = config.RETIREMENT_GATES
+for campaign in campaigns where state in {"paper_trading", "graduated"}:
+  status = bot_status(campaign.paper_trading.bot_deployment_id)
+  if status is running:
+    campaign.consecutive_container_down = 0       # reset on healthy check
+  else:
+    campaign.consecutive_container_down = (campaign.consecutive_container_down or 0) + 1
+    Log: "Container down for {strategy} — check {campaign.consecutive_container_down}"
+    if campaign.consecutive_container_down == 1:
+      # First detection — attempt restart (might be transient)
+      bot_start(campaign.paper_trading.bot_deployment_id,
+                campaign.strategy, campaign.pair, campaign.timeframe)
+      Log: "Restart attempted for {strategy}"
+    # Trigger B in Step 4 handles retirement at consecutive_container_down
+    # >= cfg.dead_container_consecutive_checks (default 2)
+```
 
 **Orphan detection:**
 
@@ -386,7 +402,13 @@ For each running bot (from `bot_list()`):
 
   If `orphan_detected_at` set AND elapsed > 48 hours:
     Auto-retire: `bot_stop(deployment_id, confirm=true)`
-    Free the slot
+    # Update authoritative slot state
+    dep = find in deployments.deployments where bot_deployment_id == deployment_id
+    if dep:
+      dep.state = "retired"
+      dep.retired_reason = "orphan_auto_retired"
+      write auto-mode/deployments.json
+      sync_state_to_supabase(state_key="deployments", ...)
     Post: "Orphan auto-retired: {strategy}. No campaign after 48h."
     `aphexdata_record_event(verb_id="orphan_auto_retired", verb_category="execution", object_type="deployment", ...)`
 
@@ -976,14 +998,16 @@ max_dd = archetype.graduation_gates.max_drawdown_pct
   → Retire immediately. Stop bot. Free slot.
 
 **TRIGGER B — Dead container (immediate)**
-  Container status != running for 2 consecutive health checks
-  AND no restart detected between checks
+  `campaign.consecutive_container_down >= cfg.dead_container_consecutive_checks`
+  (default: 2 — persisted across ticks by Step 1 reconcile)
   Reason: `"container_failed"`
 
-  The container crashed and didn't recover. Auto-mode can't
-  restart containers — that's an infrastructure issue.
+  Step 1 attempted a restart on first detection. If the container
+  is still down on the next health check, the restart failed and
+  the container is genuinely dead. Auto-mode can't fix
+  infrastructure — retire and free the slot.
 
-  → Retire. Free slot. Alert user: "Container down for {strategy}"
+  → Retire. Alert user: "Container down for {strategy}"
 
 **TRIGGER C — Clear negative edge (needs trades)**
   `current_trade_count >= 5`
@@ -1353,7 +1377,14 @@ If portfolio_win_rate < 0.30 AND total_trades >= 10:
 Stop container: bot_stop(bot_deployment_id)
 campaign.state = "retired"
 campaign.paper_trading.retire_reason = reason
-Free the slot
+
+# Update authoritative slot state (deployments.json is what the slot counter reads)
+dep = find in deployments.deployments where id == campaign.id
+dep.state = "retired"
+dep.retired_reason = reason
+write auto-mode/deployments.json
+sync_state_to_supabase(state_key="deployments", ...)
+
 aphexdata_record_event(verb_id="kata_retired_early", ...)
 Post to feed: "Early retirement: {strategy} on {pair}/{tf} — {reason}"
 Message user: "{strategy} retired early — {reason}"
@@ -1709,7 +1740,14 @@ is still accepted for backwards compatibility with pre-bridge campaigns.
 ```
 campaign.state = "retired"
 campaign.paper_trading.retire_reason = reason
-Stop container, free slot
+Stop container: bot_stop(bot_deployment_id, confirm=true)
+
+# Update authoritative slot state (deployments.json is what the slot counter reads)
+dep = find in deployments.deployments where id == campaign.id
+dep.state = "retired"
+dep.retired_reason = reason
+write auto-mode/deployments.json
+sync_state_to_supabase(state_key="deployments", ...)
 
 Update TRADE.md on retirement:
   TRADE_MD="/workspace/group/strategies/${strategy_name}.trade.md"
@@ -1977,6 +2015,7 @@ aphexdata_record_event(
 
 Sync ALL critical state files to Supabase:
   sync_state_to_supabase(state_key="campaigns", ...)
+  sync_state_to_supabase(state_key="deployments", ...)
   sync_state_to_supabase(state_key="triage_matrix", ...)
   sync_state_to_supabase(state_key="roster", ...)
   sync_state_to_supabase(state_key="portfolio_correlation", ...)
