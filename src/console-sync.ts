@@ -295,6 +295,29 @@ function loadCampaigns(): { campaigns: any[]; budget: any | null } {
   return { campaigns: allCampaigns, budget };
 }
 
+function loadSeason(): any | null {
+  try {
+    if (!fs.existsSync(GROUPS_DIR)) return null;
+    for (const folder of fs.readdirSync(GROUPS_DIR)) {
+      const filePath = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'season.json',
+      );
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      } catch {
+        // skip malformed files
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function loadRegimeIntel(): any | null {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return null;
@@ -705,11 +728,12 @@ export async function runConsoleSync(
   );
   const research = loadResearchData();
   const regimeIntel = loadRegimeIntel();
+  const season = loadSeason();
   const tvSignalSources = loadTvSignalSources();
   const tvSignalLog = loadTvSignalLog();
 
   // Build payload
-  const payload = {
+  const payload: Record<string, any> = {
     health: {
       nanoclaw_pid: process.pid,
       uptime_seconds: Math.floor(process.uptime()),
@@ -731,6 +755,9 @@ export async function runConsoleSync(
     tv_signal_sources: tvSignalSources,
     tv_signal_log: tvSignalLog,
   };
+  if (season) {
+    payload.season = season;
+  }
 
   const success = await pushToConsole(config, payload);
 
@@ -758,6 +785,7 @@ export async function runConsoleSync(
         trendBoosted: research.cellGrid.filter((c: any) => c.trend_boost !== 0)
           .length,
         triageMatrix: triageMatrix.length,
+        season: season ? season.season_id : 'none',
       },
       '[console-sync] Push complete',
     );
