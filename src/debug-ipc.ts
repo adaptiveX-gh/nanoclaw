@@ -24,12 +24,13 @@ function runScript(
   script: string,
   args: object,
   timeout = 60000,
+  skillDir = 'browser-debug',
 ): Promise<SkillResult> {
   const scriptPath = path.join(
     process.cwd(),
     '.claude',
     'skills',
-    'browser-debug',
+    skillDir,
     'scripts',
     `${script}.ts`,
   );
@@ -179,22 +180,23 @@ export async function handleDebugIpc(
       break;
 
     case 'debug_reauth': {
-      const t = target === 'both' ? 'x and luxalgo' : target;
-      const commands: string[] = [];
-      if (target === 'x' || target === 'both') {
-        commands.push(
-          'npx dotenv -e .env -- npx tsx .claude/skills/x-integration/scripts/setup.ts',
-        );
+      const targets: string[] = [];
+      if (target === 'luxalgo' || target === 'both') targets.push('luxalgo');
+      if (target === 'x' || target === 'both') targets.push('x');
+
+      const results: SkillResult[] = [];
+      for (const t of targets) {
+        const dir = t === 'luxalgo' ? 'luxalgo-quant' : 'x-integration';
+        results.push(await runScript('setup', {}, 300_000, dir));
       }
-      if (target === 'luxalgo' || target === 'both') {
-        commands.push(
-          'npx dotenv -e .env -- npx tsx .claude/skills/luxalgo-quant/scripts/setup.ts',
-        );
-      }
+
+      const allOk = results.every((r) => r.success);
       result = {
-        success: true,
-        message: `Re-authentication required for ${t}. Run setup on the host machine (requires interactive browser).`,
-        data: { commands },
+        success: allOk,
+        message: allOk
+          ? 'Re-authentication complete'
+          : 'Re-authentication failed',
+        data: { results },
       };
       break;
     }
