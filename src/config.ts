@@ -67,10 +67,7 @@ export const DAILY_TASK_BUDGET = parseInt(
 
 // Task IDs (or prompt substrings) that are exempt from budget limits.
 // These tasks always run even when the daily budget is exceeded.
-export const BUDGET_EXEMPT_PATTERNS = [
-  /monitor.?health/i,
-  /monitor.?deploy/i,
-];
+export const BUDGET_EXEMPT_PATTERNS = [/monitor.?health/i, /monitor.?deploy/i];
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
