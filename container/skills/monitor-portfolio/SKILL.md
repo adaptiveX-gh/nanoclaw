@@ -35,8 +35,13 @@ Files read:
 - `auto-mode/portfolio-risk.json` — tail contribution data
 - `auto-mode/competition-state.json` — competition mode state
 - `auto-mode/experiment-ledger.jsonl` — open experiments
-- `scoring-config.json` — TAIL_RISK, SLOT_MANAGEMENT config
+- `scoring-config.json` — TAIL_RISK, SLOT_MANAGEMENT, SEASON config
 - `knowledge/live-attribution-rollup.json` — attribution data
+- `auto-mode/season.json` — season lifecycle + dashboard (if exists)
+- `auto-mode/deployments.json` — slot counts for season dashboard
+- `knowledge/discoveries.jsonl` — knowledge growth (season)
+- `knowledge/anti-patterns.jsonl` — knowledge growth (season)
+- `knowledge/graduations.jsonl` — knowledge growth (season)
 
 Files written:
 - `auto-mode/portfolio-correlation.json` — updated correlation data
@@ -48,6 +53,7 @@ Files written:
 - `auto-mode/experiment-ledger.jsonl` — resolved experiments
 - `reports/briefings/YYYY-MM-DD.md` — daily briefing
 - `auto-mode/tick-log.jsonl` — step trace (append)
+- `auto-mode/season.json` — season dashboard updates (if active)
 
 ## Console Sync — Mandatory
 
@@ -58,6 +64,7 @@ After writing any state file, sync to Supabase:
 | `portfolio-correlation.json` | `portfolio_correlation` |
 | `regime-transitions.json` | `regime_transitions` |
 | `campaigns.json` | `campaigns` |
+| `season.json` | `season` |
 
 ### Step 8: PORTFOLIO CORRELATION (daily at 00:00 only)
 
@@ -432,6 +439,277 @@ the agent acts, it does not ask.
 in the daily rollup are ANSWERED by the agent, not posed to the user.
 The agent sets target conditions, identifies obstacles, chooses next
 steps, and executes them. The user reviews the scorecard after the fact.
+
+### Step 8e: SEASON DASHBOARD (daily, only when season active)
+
+```
+season = read auto-mode/season.json (or null)
+if season is null OR season.status != "active": skip Step 8e entirely
+
+# --- Auto-complete guard ---
+if now > season.ends_at:
+  season.status = "completed"
+  season.completed_at = now ISO
+  write auto-mode/season.json
+  sync_state_to_supabase(state_key="season", file="auto-mode/season.json")
+  aphexdata_record_event({
+    verb_id: "season_auto_completed",
+    verb_category: "execution",
+    object_type: "season",
+    object_id: season.season_id
+  })
+  Log: "Season {season.season_id} auto-completed (deadline reached)."
+  skip remaining Step 8e
+
+day_number = (now - season.started_at).days + 1
+season_config = scoring_config.SEASON ?? { concern_thresholds: {} }
+thresholds = season_config.concern_thresholds ?? {}
+```
+
+**COMPETITION POSITION:**
+
+```
+# From competition-state.json (already read earlier in Daily Rollup)
+competition_state = read auto-mode/competition-state.json (already in memory)
+
+if competition_state exists AND competition_state.benchmark.daily_snapshots not empty:
+  last_snap = competition_state.benchmark.daily_snapshots[-1]
+  score_pct = last_snap.portfolio_return_pct
+  btc_return_pct = last_snap.btc_return_pct
+  alpha_pct = last_snap.alpha_pct
+else:
+  score_pct = null
+  btc_return_pct = null
+  alpha_pct = null
+
+# Rank from aphexdata (graceful degradation if unavailable)
+try:
+  standings = aphexdata_get_standings(competition_id=season.season_id)
+  rank = standings.rank
+  total_agents = standings.total
+except:
+  rank = null
+  total_agents = null
+
+season.dashboard.competition_position = {
+  score_pct: score_pct,
+  btc_return_pct: btc_return_pct,
+  alpha_pct: alpha_pct,
+  rank: rank,
+  total_agents: total_agents
+}
+```
+
+**OPERATIONAL HEALTH:**
+
+```
+# Slots — from deployments.json
+deployments = read auto-mode/deployments.json
+active_deps = [d for d in deployments
+               if d.state in ("shadow", "active", "paused")
+               and d.slot_state in ("trial", "graduated")]
+slots_filled = len(active_deps)
+
+# Group breakdown — from campaigns.json (already in memory from Step 8)
+campaigns = read auto-mode/campaigns.json (already in memory)
+by_group = {"trend": 0, "range": 0, "vol": 0, "carry": 0}
+for c in campaigns:
+  if c.state not in ("retired",) and c.slot_state in ("trial", "graduated"):
+    group = c.correlation_group ?? "carry"
+    by_group[group] += 1
+
+groups_covered = len([g for g in by_group.values() if g > 0])
+group_coverage = f"{groups_covered}/4"
+
+# Avg correlation — from portfolio-correlation.json (written in Step 8)
+portfolio_corr = read auto-mode/portfolio-correlation.json (already in memory)
+avg_correlation = portfolio_corr.avg_pairwise_correlation ?? null
+
+season.dashboard.operational_health = {
+  slots_filled: slots_filled,
+  slots_total: scoring_config.PORTFOLIO_CONSTRAINTS.max_total_deployments ?? 10,
+  strategies_by_group: by_group,
+  group_coverage: group_coverage,
+  avg_correlation: avg_correlation
+}
+```
+
+**QUALITY SIGNALS:**
+
+```
+# Backtest divergence — from campaigns with paper_trading data
+active_campaigns = [c for c in campaigns
+                    if c.state not in ("retired",)
+                    and c.slot_state in ("trial", "graduated")]
+
+divergence_vals = [
+  c.paper_trading.divergence_pct
+  for c in active_campaigns
+  if c.paper_trading is not null
+  and c.paper_trading.divergence_pct is not null
+]
+avg_divergence = mean(divergence_vals) if divergence_vals else null
+
+# PPP margins — DSR margin = actual DSR - 1.96, PBO margin = 0.30 - actual PBO
+dsr_margins = [
+  c.wfo_metrics.dsr - 1.96
+  for c in active_campaigns
+  if c.wfo_metrics is not null and c.wfo_metrics.dsr is not null
+]
+pbo_margins = [
+  0.30 - c.wfo_metrics.pbo
+  for c in active_campaigns
+  if c.wfo_metrics is not null and c.wfo_metrics.pbo is not null
+]
+dsr_margin_avg = mean(dsr_margins) if dsr_margins else null
+pbo_margin_avg = mean(pbo_margins) if pbo_margins else null
+
+# Win rate range
+win_rates = [
+  c.paper_trading.win_rate
+  for c in active_campaigns
+  if c.paper_trading is not null and c.paper_trading.win_rate is not null
+]
+win_rate_range = [min(win_rates), max(win_rates)] if win_rates else null
+
+season.dashboard.quality_signals = {
+  avg_backtest_divergence_pct: avg_divergence,
+  dsr_margin_avg: dsr_margin_avg,
+  pbo_margin_avg: pbo_margin_avg,
+  win_rate_range: win_rate_range
+}
+```
+
+**ADAPTIVE CAPACITY:**
+
+```
+# Knowledge growth since season start
+discoveries_now = count lines in knowledge/discoveries.jsonl (0 if missing)
+antipatterns_now = count lines in knowledge/anti-patterns.jsonl (0 if missing)
+
+baseline = season.knowledge_baseline ?? {discoveries: 0, anti_patterns: 0}
+discoveries_growth = discoveries_now - baseline.discoveries
+antipatterns_growth = antipatterns_now - baseline.anti_patterns
+
+# Recovery events — count retirement+replacement cycles in campaigns
+# A recovery = a trial that was deployed after a retirement in the same group
+retired_during_season = [
+  c for c in campaigns
+  if c.state == "retired"
+  and c.evicted_at is not null
+  and c.evicted_at >= season.started_at
+]
+recovery_events = len(retired_during_season)
+
+# Success = a replacement in the same group that graduated
+replacements = [
+  c for c in active_campaigns
+  if c.deployed_at is not null
+  and c.deployed_at >= season.started_at
+  and c.slot_state == "graduated"
+]
+recovery_success_count = len(replacements)
+
+season.dashboard.adaptive_capacity = {
+  recovery_events: recovery_events,
+  recovery_success_count: recovery_success_count,
+  knowledge_discoveries_since_start: discoveries_growth,
+  knowledge_antipatterns_since_start: antipatterns_growth
+}
+```
+
+**CONCERNS (auto-generated):**
+
+```
+concerns = []
+
+# 1. Group coverage gap
+empty_groups = [g for g, count in by_group.items() if count == 0]
+min_coverage = thresholds.group_coverage_min ?? 3
+if groups_covered < min_coverage:
+  concerns.append({
+    severity: "high",
+    message: f"Only {groups_covered}/4 groups covered (target: >={min_coverage}). Empty: {', '.join(empty_groups)}"
+  })
+
+# 2. High average divergence
+div_warn = thresholds.divergence_warn_pct ?? 0.25
+if avg_divergence is not null and avg_divergence > div_warn:
+  concerns.append({
+    severity: "medium",
+    message: f"Avg backtest divergence {avg_divergence:.0%} exceeds {div_warn:.0%} threshold"
+  })
+
+# 3. High correlation
+corr_warn = thresholds.correlation_warn ?? 0.30
+if avg_correlation is not null and avg_correlation > corr_warn:
+  concerns.append({
+    severity: "medium",
+    message: f"Portfolio correlation {avg_correlation:.2f} above {corr_warn:.2f} target"
+  })
+
+# 4. Thin PPP margins
+dsr_warn = thresholds.dsr_margin_warn ?? 0.20
+pbo_warn = thresholds.pbo_margin_warn ?? 0.10
+at_risk = [
+  c.strategy for c in active_campaigns
+  if c.wfo_metrics is not null
+  and ((c.wfo_metrics.dsr is not null and c.wfo_metrics.dsr - 1.96 < dsr_warn)
+       or (c.wfo_metrics.pbo is not null and 0.30 - c.wfo_metrics.pbo < pbo_warn))
+]
+if at_risk:
+  concerns.append({
+    severity: "low",
+    message: f"{len(at_risk)} strategy(s) with thin PPP margin: {', '.join(at_risk[:3])}"
+  })
+
+# 5. Per-strategy divergence watch (approaching Trigger F)
+for c in active_campaigns:
+  if (c.paper_trading is not null
+      and c.paper_trading.divergence_pct is not null
+      and c.paper_trading.divergence_pct > 0.20):
+    trigger_dist = 0.30 - c.paper_trading.divergence_pct
+    concerns.append({
+      severity: "low" if trigger_dist > 0.05 else "medium",
+      message: f"{c.strategy} divergence {c.paper_trading.divergence_pct:.0%}, watch for Trigger F"
+    })
+
+# 6. Group with only 1 strategy (fragile coverage)
+thin_groups = [g for g, count in by_group.items() if count == 1]
+for g in thin_groups:
+  strat = next((c.strategy for c in active_campaigns if c.correlation_group == g), "?")
+  concerns.append({
+    severity: "low",
+    message: f"{g.upper()} group has only 1 strategy ({strat}), target 2+"
+  })
+
+season.dashboard.concerns = concerns
+```
+
+**Write and sync:**
+
+```
+# Append daily snapshot for trend tracking
+snapshot = {
+  date: today_iso,
+  day_number: day_number,
+  score_pct: score_pct,
+  alpha_pct: alpha_pct,
+  slots_filled: slots_filled,
+  groups_covered: groups_covered,
+  knowledge_discoveries: discoveries_growth,
+  knowledge_antipatterns: antipatterns_growth,
+  concerns_count: len(concerns)
+}
+season.snapshots.append(snapshot)
+season.dashboard.last_computed = now ISO
+season.dashboard.day_number = day_number
+
+write auto-mode/season.json
+sync_state_to_supabase(state_key="season", file="auto-mode/season.json")
+
+Log: "Season dashboard: Day {day_number}/{season.duration_days}, alpha={alpha_pct}, slots={slots_filled}/{slots_total}, {len(concerns)} concerns"
+```
 
 ## Epilogue — Sync and Log
 

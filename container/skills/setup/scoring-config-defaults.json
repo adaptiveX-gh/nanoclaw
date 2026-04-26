@@ -133,6 +133,18 @@
     }
   },
 
+  "SEASON": {
+    "_comment": "28-day performance season. One active at a time. Created by add-season installer. Dashboard computed by monitor-portfolio Step 8e.",
+    "duration_days": 28,
+    "concern_thresholds": {
+      "group_coverage_min": 3,
+      "divergence_warn_pct": 0.25,
+      "correlation_warn": 0.30,
+      "dsr_margin_warn": 0.20,
+      "pbo_margin_warn": 0.10
+    }
+  },
+
   "CIRCUIT_BREAKER": {
     "dd_alert_pct": 5,
     "dd_pause_pct": 10,

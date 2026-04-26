@@ -73,6 +73,7 @@ from Supabase, not from local files. Files to sync:
 | `portfolio-correlation.json` | `portfolio_correlation` |
 | `tv-signals.json` | `tv_signals` |
 | `regime-intel.json` | `regime_intel` |
+| `season.json` | `season` |
 
 ---
 
@@ -2150,6 +2151,7 @@ Sync ALL critical state files to Supabase:
   sync_state_to_supabase(state_key="tv_signals", ...)        # if tv-signals.json exists
   sync_state_to_supabase(state_key="market_prior", ...)
   sync_state_to_supabase(state_key="regime_transitions", ...)
+  sync_state_to_supabase(state_key="season", ...)            # if season.json exists
 
 This serves as a backup mechanism — all institutional memory is
 recoverable from Supabase if local files are lost.
