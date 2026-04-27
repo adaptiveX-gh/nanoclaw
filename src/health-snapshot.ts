@@ -209,17 +209,27 @@ function extractMetrics(botStatus: any): BotMetrics {
 
   const trades = pnl.enriched_trades || [];
   if (trades.length > 0) {
-    const wins = trades.filter((t: any) => (t.profit_ratio ?? t.profit_pct ?? 0) > 0);
-    const losses = trades.filter((t: any) => (t.profit_ratio ?? t.profit_pct ?? 0) <= 0);
+    const wins = trades.filter(
+      (t: any) => (t.profit_ratio ?? t.profit_pct ?? 0) > 0,
+    );
+    const losses = trades.filter(
+      (t: any) => (t.profit_ratio ?? t.profit_pct ?? 0) <= 0,
+    );
     if (wins.length > 0) {
       avgWin =
-        wins.reduce((s: number, t: any) => s + Math.abs(t.profit_ratio ?? t.profit_pct ?? 0), 0) /
-        wins.length;
+        wins.reduce(
+          (s: number, t: any) =>
+            s + Math.abs(t.profit_ratio ?? t.profit_pct ?? 0),
+          0,
+        ) / wins.length;
     }
     if (losses.length > 0) {
       avgLoss =
-        losses.reduce((s: number, t: any) => s + Math.abs(t.profit_ratio ?? t.profit_pct ?? 0), 0) /
-        losses.length;
+        losses.reduce(
+          (s: number, t: any) =>
+            s + Math.abs(t.profit_ratio ?? t.profit_pct ?? 0),
+          0,
+        ) / losses.length;
     }
 
     // Max consecutive losses
@@ -315,9 +325,11 @@ function joinBotWithCampaign(botStatus: any, campaigns: any[]): BotSnapshot {
     feasibility_warning: pt?.feasibility_warning ?? false,
 
     divergence_pct: pt?.divergence_pct ?? null,
-    wfo_sharpe: campaign?.wfo_sharpe ?? campaign?.wfo_metrics?.favorable_sharpe ?? null,
+    wfo_sharpe:
+      campaign?.wfo_sharpe ?? campaign?.wfo_metrics?.favorable_sharpe ?? null,
 
-    eviction_priority: pt?.eviction_priority ?? campaign?.eviction_priority ?? null,
+    eviction_priority:
+      pt?.eviction_priority ?? campaign?.eviction_priority ?? null,
     eviction_factors: pt?.eviction_factors ?? campaign?.eviction_factors ?? [],
   };
 }
@@ -332,7 +344,10 @@ export function computeHealthSnapshot(): HealthSnapshot | null {
 
     // Only include running or recently-errored bots (not stopped/retired)
     const activeBots = botStatuses.filter(
-      (b: any) => b.status === 'running' || b.status === 'error' || b.status === 'starting',
+      (b: any) =>
+        b.status === 'running' ||
+        b.status === 'error' ||
+        b.status === 'starting',
     );
 
     const bots = activeBots.map((b: any) => joinBotWithCampaign(b, campaigns));
