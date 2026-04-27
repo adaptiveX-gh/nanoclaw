@@ -159,7 +159,7 @@ function computeTrendBoost(
   return 0.0;
 }
 
-function loadBotStatuses(dataDir: string): any[] {
+export function loadBotStatuses(dataDir: string): any[] {
   const botsDir = path.join(dataDir, 'bot-runner/bots');
   if (!fs.existsSync(botsDir)) return [];
   return fs
@@ -237,7 +237,7 @@ function loadTvSignalLog(): any[] {
   return allEntries;
 }
 
-function loadDeployments(): any[] {
+export function loadDeployments(): any[] {
   // Deployments live under groups/<folder>/auto-mode/deployments.json
   const allDeployments: any[] = [];
   try {
@@ -267,7 +267,7 @@ function loadDeployments(): any[] {
   return allDeployments;
 }
 
-function loadCampaigns(): { campaigns: any[]; budget: any | null } {
+export function loadCampaigns(): { campaigns: any[]; budget: any | null } {
   // Campaigns live under groups/<folder>/research-planner/campaigns.json (legacy path)
   const allCampaigns: any[] = [];
   let budget: any | null = null;
@@ -295,7 +295,7 @@ function loadCampaigns(): { campaigns: any[]; budget: any | null } {
   return { campaigns: allCampaigns, budget };
 }
 
-function loadSeason(): any | null {
+export function loadSeason(): any | null {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return null;
     for (const folder of fs.readdirSync(GROUPS_DIR)) {

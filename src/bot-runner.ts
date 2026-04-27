@@ -42,6 +42,7 @@ import {
   type FtTradeLike,
 } from './trade-enrichment.js';
 import { dispatchSignal, type TradeEvent } from './webhook-dispatcher.js';
+import { computeHealthSnapshot } from './health-snapshot.js';
 
 // ─── Configuration ──────────────────────────────────────────────────
 
@@ -1738,6 +1739,9 @@ async function healthCheckBots(): Promise<void> {
       );
     }
   }
+
+  // Phase 1: write pre-joined health snapshot for monitor-health LLM agent
+  computeHealthSnapshot();
 }
 
 // ─── Poll Loop ──────────────────────────────────────────────────────
