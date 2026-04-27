@@ -39,7 +39,9 @@ export function reconcileState(
   // 1. slot_state sync: campaign → deployment
   for (const campaign of campaigns) {
     const dep = deployments.find(
-      (d: any) => d.campaign_id === campaign.id || d.deployment_id === campaign.paper_trading?.bot_deployment_id,
+      (d: any) =>
+        d.campaign_id === campaign.id ||
+        d.deployment_id === campaign.paper_trading?.bot_deployment_id,
     );
     if (!dep) continue;
 
@@ -84,7 +86,8 @@ export function reconcileState(
 
     // 3. Graduation propagation: campaign → deployment
     if (
-      (campaign.state === 'graduated_internal_only' || campaign.state === 'graduated_external') &&
+      (campaign.state === 'graduated_internal_only' ||
+        campaign.state === 'graduated_external') &&
       dep.state !== campaign.state
     ) {
       patches.push({

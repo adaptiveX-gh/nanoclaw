@@ -24,7 +24,12 @@ const TICKER_DATA_DIR = path.join(DATA_DIR, 'monitor-health');
 
 // ─── Environment ────────────────────────────────────────────────────
 
-const ENV_KEYS = ['ORDERFLOW_API_URL', 'APHEXDATA_URL', 'APHEXDATA_API_KEY', 'APHEXDATA_AGENT_ID'];
+const ENV_KEYS = [
+  'ORDERFLOW_API_URL',
+  'APHEXDATA_URL',
+  'APHEXDATA_API_KEY',
+  'APHEXDATA_AGENT_ID',
+];
 
 function getEnv(): Record<string, string> {
   return readEnvFile(ENV_KEYS);
@@ -60,7 +65,7 @@ export async function fetchRegimes(symbols: string[]): Promise<RegimeData[]> {
     }
     const data = await res.json();
     // API returns an array of regime data objects
-    return Array.isArray(data) ? data : (data as any).regimes ?? [];
+    return Array.isArray(data) ? data : ((data as any).regimes ?? []);
   } catch (err) {
     clearTimeout(timeout);
     logger.warn({ err }, 'Orderflow API fetch failed');
@@ -85,7 +90,9 @@ export async function recordAphexdataEvent(event: {
   }
 
   const url = `${env.APHEXDATA_URL}/api/v1/events`;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
   if (env.APHEXDATA_API_KEY) {
     headers['Authorization'] = `Bearer ${env.APHEXDATA_API_KEY}`;
   }
@@ -104,7 +111,10 @@ export async function recordAphexdataEvent(event: {
     });
     if (!res.ok) {
       const text = await res.text();
-      logger.warn({ status: res.status, text }, 'aphexDATA event recording failed');
+      logger.warn(
+        { status: res.status, text },
+        'aphexDATA event recording failed',
+      );
     }
   } catch (err) {
     logger.warn({ err }, 'aphexDATA event recording error');
@@ -152,7 +162,9 @@ export function applyReconcilePatches(patches: ReconcilePatch[]): void {
     const data = readJsonFile(filePath);
     if (data?.campaigns) {
       for (const patch of campaignPatches) {
-        const campaign = data.campaigns.find((c: any) => c.id === patch.campaign_id);
+        const campaign = data.campaigns.find(
+          (c: any) => c.id === patch.campaign_id,
+        );
         if (campaign) campaign[patch.field] = patch.new_value;
       }
       writeJsonFile(filePath, data);
@@ -165,7 +177,9 @@ export function applyReconcilePatches(patches: ReconcilePatch[]): void {
     if (data?.deployments) {
       for (const patch of deploymentPatches) {
         const dep = data.deployments.find(
-          (d: any) => d.campaign_id === patch.campaign_id || d.deployment_id === patch.campaign_id,
+          (d: any) =>
+            d.campaign_id === patch.campaign_id ||
+            d.deployment_id === patch.campaign_id,
         );
         if (dep) dep[patch.field] = patch.new_value;
       }
@@ -178,7 +192,9 @@ export function applyReconcilePatches(patches: ReconcilePatch[]): void {
     const data = readJsonFile(filePath);
     if (data?.cells) {
       for (const patch of rosterPatches) {
-        const cell = data.cells.find((c: any) => c.deployment_id === patch.campaign_id);
+        const cell = data.cells.find(
+          (c: any) => c.deployment_id === patch.campaign_id,
+        );
         if (cell) cell[patch.field] = patch.new_value;
       }
       writeJsonFile(filePath, data);
@@ -218,7 +234,8 @@ export function writeRetirement(
   const depData = readJsonFile(depPath);
   if (depData?.deployments) {
     const dep = depData.deployments.find(
-      (d: any) => d.deployment_id === deploymentId || d.campaign_id === campaignId,
+      (d: any) =>
+        d.deployment_id === deploymentId || d.campaign_id === campaignId,
     );
     if (dep) {
       dep.state = 'retired';
@@ -261,7 +278,8 @@ export function writeGraduation(
   const depData = readJsonFile(depPath);
   if (depData?.deployments) {
     const dep = depData.deployments.find(
-      (d: any) => d.deployment_id === deploymentId || d.campaign_id === campaignId,
+      (d: any) =>
+        d.deployment_id === deploymentId || d.campaign_id === campaignId,
     );
     if (dep) {
       dep.state = 'graduated_internal_only';
@@ -278,7 +296,11 @@ export function writeValidationExtension(
   campaignId: string,
   extensionDays: number,
   reason: string,
-  flags: { extended?: boolean; regime_extension?: boolean; rr_extension?: boolean },
+  flags: {
+    extended?: boolean;
+    regime_extension?: boolean;
+    rr_extension?: boolean;
+  },
 ): void {
   const groupDir = findGroupDir();
   if (!groupDir) return;
@@ -324,7 +346,10 @@ export function writeSignalToggle(campaignId: string, enable: boolean): void {
   }
 }
 
-export function writeInvestigationMode(campaignId: string, reason: string): void {
+export function writeInvestigationMode(
+  campaignId: string,
+  reason: string,
+): void {
   const groupDir = findGroupDir();
   if (!groupDir) return;
 
@@ -403,9 +428,15 @@ export function writeEvolutionEvent(transition: Transition): void {
     event_id: `evo_${new Date().toISOString().slice(0, 10)}_${transition.campaign_id.slice(0, 8)}`,
     resource_type: 'campaign',
     resource_id: transition.campaign_id,
-    operation: transition.to_state.startsWith('graduated') ? 'commit' : 'rollback',
-    committed_to: transition.to_state.startsWith('graduated') ? 'graduated_slot' : undefined,
-    rollback_reason: transition.trigger_id ? `trigger_${transition.trigger_id}` : transition.reason,
+    operation: transition.to_state.startsWith('graduated')
+      ? 'commit'
+      : 'rollback',
+    committed_to: transition.to_state.startsWith('graduated')
+      ? 'graduated_slot'
+      : undefined,
+    rollback_reason: transition.trigger_id
+      ? `trigger_${transition.trigger_id}`
+      : transition.reason,
     net_delta: `strategy: ${transition.strategy}, ${transition.pair}/${transition.timeframe}`,
     timestamp: new Date().toISOString(),
   };
@@ -418,7 +449,11 @@ export function writeEvolutionEvent(transition: Transition): void {
   );
 }
 
-function writeLiveOutcome(bot: BotSnapshot, reason: string, outcome: string): void {
+function writeLiveOutcome(
+  bot: BotSnapshot,
+  reason: string,
+  outcome: string,
+): void {
   const groupDir = findGroupDir();
   if (!groupDir) return;
 
@@ -431,7 +466,10 @@ function writeLiveOutcome(bot: BotSnapshot, reason: string, outcome: string): vo
     timeframe: bot.timeframe,
     outcome,
     days_deployed: bot.deployed_at
-      ? Math.round((Date.now() - new Date(bot.deployed_at).getTime()) / (1000 * 60 * 60 * 24))
+      ? Math.round(
+          (Date.now() - new Date(bot.deployed_at).getTime()) /
+            (1000 * 60 * 60 * 24),
+        )
       : null,
     trade_count: bot.metrics.trade_count,
     pnl_pct: bot.metrics.profit_pct,
@@ -488,7 +526,10 @@ export async function executeRetirement(
   try {
     await deps.stopBotContainer(bot.deployment_id);
   } catch (err) {
-    logger.warn({ err, deploymentId: bot.deployment_id }, 'Failed to stop container on retirement');
+    logger.warn(
+      { err, deploymentId: bot.deployment_id },
+      'Failed to stop container on retirement',
+    );
   }
 
   writeRetirement(
@@ -504,7 +545,12 @@ export async function executeRetirement(
     verb_category: 'lifecycle',
     object_type: 'campaign',
     object_id: bot.campaign_id ?? bot.deployment_id,
-    result_data: { reason, trigger: triggerId, strategy: bot.strategy, pair: bot.pair },
+    result_data: {
+      reason,
+      trigger: triggerId,
+      strategy: bot.strategy,
+      pair: bot.pair,
+    },
   });
 
   const msg = `Retired: ${bot.strategy} on ${bot.pair}/${bot.timeframe} — ${reason}`;
@@ -514,7 +560,10 @@ export async function executeRetirement(
     logger.warn({ err }, 'Failed to send retirement message');
   }
 
-  logger.info({ strategy: bot.strategy, reason, trigger: triggerId }, 'Bot retired');
+  logger.info(
+    { strategy: bot.strategy, reason, trigger: triggerId },
+    'Bot retired',
+  );
   return transition;
 }
 
@@ -533,14 +582,13 @@ export async function executeGraduation(
     reason,
   };
 
-  writeGraduation(
-    bot.campaign_id ?? bot.deployment_id,
-    bot.deployment_id,
-    bot,
-  );
+  writeGraduation(bot.campaign_id ?? bot.deployment_id, bot.deployment_id, bot);
   writeEvolutionEvent(transition);
 
-  const verbId = reason === 'early_graduation' ? 'slot_trial_early_graduated' : 'slot_trial_graduated';
+  const verbId =
+    reason === 'early_graduation'
+      ? 'slot_trial_early_graduated'
+      : 'slot_trial_graduated';
   await recordAphexdataEvent({
     verb_id: verbId,
     verb_category: 'lifecycle',
@@ -555,7 +603,8 @@ export async function executeGraduation(
     },
   });
 
-  const prefix = reason === 'early_graduation' ? 'EARLY GRADUATED' : 'GRADUATED';
+  const prefix =
+    reason === 'early_graduation' ? 'EARLY GRADUATED' : 'GRADUATED';
   const msg = `${prefix}: ${bot.strategy} on ${bot.pair}/${bot.timeframe} — Sharpe ${bot.metrics.sharpe.toFixed(2)}, ${bot.metrics.trade_count} trades, P&L ${bot.metrics.profit_pct.toFixed(1)}%`;
   try {
     await deps.sendMessage(deps.chatJid, msg);
@@ -576,7 +625,10 @@ export async function executeSignalToggle(
   try {
     await deps.toggleBotSignals(bot.deployment_id, enable);
   } catch (err) {
-    logger.warn({ err, deploymentId: bot.deployment_id }, 'Failed to toggle signals');
+    logger.warn(
+      { err, deploymentId: bot.deployment_id },
+      'Failed to toggle signals',
+    );
     return;
   }
 
@@ -603,7 +655,10 @@ export async function executePause(
   try {
     await deps.toggleBotSignals(bot.deployment_id, false);
   } catch (err) {
-    logger.warn({ err, deploymentId: bot.deployment_id }, 'Failed to pause signals');
+    logger.warn(
+      { err, deploymentId: bot.deployment_id },
+      'Failed to pause signals',
+    );
   }
 
   writeInvestigationMode(bot.campaign_id ?? bot.deployment_id, reason);

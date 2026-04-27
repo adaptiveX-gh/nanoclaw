@@ -56,7 +56,9 @@ export function evaluatePrimaryGates(
 
   // 4. min_risk_reward_ratio
   const rr =
-    bot.metrics.avg_win_pct != null && bot.metrics.avg_loss_pct != null && bot.metrics.avg_loss_pct > 0
+    bot.metrics.avg_win_pct != null &&
+    bot.metrics.avg_loss_pct != null &&
+    bot.metrics.avg_loss_pct > 0
       ? bot.metrics.avg_win_pct / bot.metrics.avg_loss_pct
       : null;
   gates.push({
@@ -82,7 +84,10 @@ export function evaluatePrimaryGates(
     name: 'max_divergence',
     required: gg.max_divergence,
     actual: bot.divergence_pct,
-    met: bot.divergence_pct != null ? bot.divergence_pct <= gg.max_divergence : null,
+    met:
+      bot.divergence_pct != null
+        ? bot.divergence_pct <= gg.max_divergence
+        : null,
   });
 
   return gates;
@@ -99,11 +104,19 @@ export interface OverfittingCheckResult {
 export function evaluateOverfittingGate(
   bot: BotSnapshot,
   config: ScoringConfig,
-  wfoMetrics: { dsr?: number; pbo?: number; n_strategies_tried?: number } | null,
+  wfoMetrics: {
+    dsr?: number;
+    pbo?: number;
+    n_strategies_tried?: number;
+  } | null,
 ): OverfittingCheckResult {
   const og = config.OVERFITTING_GATES;
   if (!og.enabled) {
-    return { passed: true, action: 'continue', reason: 'overfitting_gate_disabled' };
+    return {
+      passed: true,
+      action: 'continue',
+      reason: 'overfitting_gate_disabled',
+    };
   }
 
   if (!wfoMetrics) {
@@ -114,12 +127,20 @@ export function evaluateOverfittingGate(
 
   // PBO > eviction threshold → immediate retire
   if (pbo != null && pbo > og.pbo_evict) {
-    return { passed: false, action: 'retire', reason: 'overfit_pbo_above_evict' };
+    return {
+      passed: false,
+      action: 'retire',
+      reason: 'overfit_pbo_above_evict',
+    };
   }
 
   // Need sufficient trades for DSR evaluation
   if (bot.metrics.trade_count < og.min_trades_for_dsr) {
-    return { passed: true, action: 'continue', reason: 'insufficient_trades_for_dsr' };
+    return {
+      passed: true,
+      action: 'continue',
+      reason: 'insufficient_trades_for_dsr',
+    };
   }
 
   // DSR below threshold
@@ -140,7 +161,11 @@ export function evaluateOverfittingGate(
     };
   }
 
-  return { passed: true, action: 'continue', reason: 'overfitting_gates_passed' };
+  return {
+    passed: true,
+    action: 'continue',
+    reason: 'overfitting_gates_passed',
+  };
 }
 
 // ─── Execution Quality Gate ─────────────────────────────────────────
@@ -172,7 +197,7 @@ export function evaluateExecutionGate(
 
 function hasRRInversion(bot: BotSnapshot): boolean {
   return (
-    bot.metrics.win_rate > 0.50 &&
+    bot.metrics.win_rate > 0.5 &&
     bot.metrics.avg_win_pct != null &&
     bot.metrics.avg_loss_pct != null &&
     bot.metrics.avg_win_pct < bot.metrics.avg_loss_pct
@@ -186,7 +211,11 @@ export function evaluateGraduation(
   archetype: ArchetypeConfig,
   config: ScoringConfig,
   now: Date,
-  wfoMetrics: { dsr?: number; pbo?: number; n_strategies_tried?: number } | null,
+  wfoMetrics: {
+    dsr?: number;
+    pbo?: number;
+    n_strategies_tried?: number;
+  } | null,
 ): GraduationResult {
   const gates = evaluatePrimaryGates(bot, archetype, config);
   const allMet = gates.every((g) => g.met === true || g.met === null);
@@ -213,12 +242,22 @@ export function evaluateGraduation(
         };
       }
       if (!overfitCheck.passed) {
-        return { gates, all_met: true, action: 'none', reason: 'overfitting_block' };
+        return {
+          gates,
+          all_met: true,
+          action: 'none',
+          reason: 'overfitting_block',
+        };
       }
 
       const execCheck = evaluateExecutionGate(bot, config);
       if (!execCheck.passed) {
-        return { gates, all_met: true, action: 'none', reason: 'execution_quality_block' };
+        return {
+          gates,
+          all_met: true,
+          action: 'none',
+          reason: 'execution_quality_block',
+        };
       }
 
       return {
@@ -295,7 +334,12 @@ export function evaluateGraduation(
   // Overfitting gate
   const overfitCheck = evaluateOverfittingGate(bot, config, wfoMetrics);
   if (overfitCheck.action === 'retire') {
-    return { gates, all_met: false, action: 'retire', reason: overfitCheck.reason };
+    return {
+      gates,
+      all_met: false,
+      action: 'retire',
+      reason: overfitCheck.reason,
+    };
   }
   if (overfitCheck.action === 'extend') {
     // Check if already extended for DSR
@@ -307,17 +351,32 @@ export function evaluateGraduation(
         reason: `${overfitCheck.reason}_after_extension`,
       };
     }
-    return { gates, all_met: false, action: 'extend', reason: overfitCheck.reason };
+    return {
+      gates,
+      all_met: false,
+      action: 'extend',
+      reason: overfitCheck.reason,
+    };
   }
 
   // Execution gate
   const execCheck = evaluateExecutionGate(bot, config);
   if (!execCheck.passed) {
-    return { gates, all_met: true, action: 'none', reason: 'execution_quality_block' };
+    return {
+      gates,
+      all_met: true,
+      action: 'none',
+      reason: 'execution_quality_block',
+    };
   }
 
   if (allMet) {
-    return { gates, all_met: true, action: 'graduate', reason: 'all_gates_passed' };
+    return {
+      gates,
+      all_met: true,
+      action: 'graduate',
+      reason: 'all_gates_passed',
+    };
   }
 
   // Determine specific failure reason
@@ -328,22 +387,42 @@ export function evaluateGraduation(
 
   const wrGate = gates.find((g) => g.name === 'min_win_rate');
   if (wrGate && wrGate.met === false) {
-    return { gates, all_met: false, action: 'retire', reason: 'low_win_rate_at_graduation' };
+    return {
+      gates,
+      all_met: false,
+      action: 'retire',
+      reason: 'low_win_rate_at_graduation',
+    };
   }
 
   const rrGate = gates.find((g) => g.name === 'min_risk_reward_ratio');
   if (rrGate && rrGate.met === false) {
-    return { gates, all_met: false, action: 'retire', reason: 'poor_rr_ratio_at_graduation' };
+    return {
+      gates,
+      all_met: false,
+      action: 'retire',
+      reason: 'poor_rr_ratio_at_graduation',
+    };
   }
 
   const consLossGate = gates.find((g) => g.name === 'max_consecutive_losses');
   if (consLossGate && consLossGate.met === false) {
-    return { gates, all_met: false, action: 'retire', reason: 'consecutive_losses_at_graduation' };
+    return {
+      gates,
+      all_met: false,
+      action: 'retire',
+      reason: 'consecutive_losses_at_graduation',
+    };
   }
 
   const divGate = gates.find((g) => g.name === 'max_divergence');
   if (divGate && divGate.met === false) {
-    return { gates, all_met: false, action: 'retire', reason: 'high_divergence_at_graduation' };
+    return {
+      gates,
+      all_met: false,
+      action: 'retire',
+      reason: 'high_divergence_at_graduation',
+    };
   }
 
   return { gates, all_met: false, action: 'retire', reason: 'gates_failed' };

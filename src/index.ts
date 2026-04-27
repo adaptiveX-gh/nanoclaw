@@ -47,7 +47,11 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
-import { startBotRunner, stopBotContainer, toggleBotSignals } from './bot-runner.js';
+import {
+  startBotRunner,
+  stopBotContainer,
+  toggleBotSignals,
+} from './bot-runner.js';
 import { startHealthTicker } from './health-ticker.js';
 import { startKataRunner } from './kata-runner.js';
 import { startConsoleSync } from './console-sync.js';

@@ -29,7 +29,8 @@ export function evaluateTriggerA(
 
   // High-regime-dependency archetypes use a tighter multiplier
   const isHighRegimeDep =
-    archetype.anti_regimes.length >= 2 || archetype.preferred_regimes.length === 1;
+    archetype.anti_regimes.length >= 2 ||
+    archetype.preferred_regimes.length === 1;
   const multiplier = isHighRegimeDep
     ? config.RETIREMENT_GATES.catastrophic_dd_multiplier_high_regime_dep
     : config.RETIREMENT_GATES.catastrophic_dd_multiplier;
@@ -135,7 +136,8 @@ export function evaluateTriggerE(
   bot: BotSnapshot,
   config: ScoringConfig,
 ): TriggerResult {
-  const { trade_count, win_rate, profit_pct, avg_win_pct, avg_loss_pct } = bot.metrics;
+  const { trade_count, win_rate, profit_pct, avg_win_pct, avg_loss_pct } =
+    bot.metrics;
   if (trade_count < 5) {
     return { id: 'E', fired: false, action: 'pause', reason: '' };
   }
@@ -174,7 +176,10 @@ export function evaluateTriggerF(
   }
 
   const divergence = bot.divergence_pct;
-  if (divergence != null && divergence >= config.DIVERGENCE_GATE.route_threshold) {
+  if (
+    divergence != null &&
+    divergence >= config.DIVERGENCE_GATE.route_threshold
+  ) {
     const severe = divergence >= config.DIVERGENCE_GATE.pause_threshold;
     return {
       id: 'F',
@@ -238,7 +243,7 @@ export function evaluateTriggerG(
     const rd = regimeData as any;
     const trades = rd.n_trades ?? rd.trade_count ?? 0;
     const wr = rd.win_rate ?? 0;
-    if (trades >= 10 && wr < 0.10) {
+    if (trades >= 10 && wr < 0.1) {
       return {
         id: 'G',
         fired: true,
@@ -255,10 +260,7 @@ export function evaluateTriggerG(
 
 // ─── Trigger H: Trial Deadline ──────────────────────────────────────
 
-export function evaluateTriggerH(
-  bot: BotSnapshot,
-  now: Date,
-): TriggerResult {
+export function evaluateTriggerH(bot: BotSnapshot, now: Date): TriggerResult {
   if (bot.slot_state !== 'trial') {
     return { id: 'H', fired: false, action: 'retire', reason: '' };
   }
@@ -297,7 +299,8 @@ export function evaluateTriggerI(
 
   // Sub 1: 0 trades after 48h
   if (deployedAt && trade_count === 0) {
-    const hoursDeployed = (now.getTime() - deployedAt.getTime()) / (1000 * 60 * 60);
+    const hoursDeployed =
+      (now.getTime() - deployedAt.getTime()) / (1000 * 60 * 60);
     if (hoursDeployed >= eviction.zero_trades_hours) {
       return {
         id: 'I',
@@ -311,7 +314,8 @@ export function evaluateTriggerI(
 
   // Sub 2: <=1 trade after 72h
   if (deployedAt && trade_count <= eviction.near_dead_trades) {
-    const hoursDeployed = (now.getTime() - deployedAt.getTime()) / (1000 * 60 * 60);
+    const hoursDeployed =
+      (now.getTime() - deployedAt.getTime()) / (1000 * 60 * 60);
     if (hoursDeployed >= eviction.near_dead_hours) {
       return {
         id: 'I',
@@ -324,7 +328,10 @@ export function evaluateTriggerI(
   }
 
   // Sub 3: win_rate < 0.20 at 5+ trades
-  if (trade_count >= eviction.min_win_rate_n && win_rate < eviction.min_win_rate_floor) {
+  if (
+    trade_count >= eviction.min_win_rate_n &&
+    win_rate < eviction.min_win_rate_floor
+  ) {
     return {
       id: 'I',
       fired: true,
@@ -335,7 +342,10 @@ export function evaluateTriggerI(
   }
 
   // Sub 4: divergence >= 0.70
-  if (bot.divergence_pct != null && bot.divergence_pct >= eviction.max_divergence) {
+  if (
+    bot.divergence_pct != null &&
+    bot.divergence_pct >= eviction.max_divergence
+  ) {
     return {
       id: 'I',
       fired: true,
@@ -369,7 +379,10 @@ export function evaluateTriggerJ(
   if (!config.EXECUTION_GATES.enabled) {
     return { id: 'J', fired: false, action: 'pause', reason: '' };
   }
-  if (trade_count < config.EXECUTION_GATES.min_trades_for_gate || execution_quality == null) {
+  if (
+    trade_count < config.EXECUTION_GATES.min_trades_for_gate ||
+    execution_quality == null
+  ) {
     return { id: 'J', fired: false, action: 'pause', reason: '' };
   }
 
@@ -407,6 +420,8 @@ export function evaluateAllTriggers(
   ];
 }
 
-export function getFirstFiredTrigger(triggers: TriggerResult[]): TriggerResult | null {
+export function getFirstFiredTrigger(
+  triggers: TriggerResult[],
+): TriggerResult | null {
   return triggers.find((t) => t.fired) ?? null;
 }

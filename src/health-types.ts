@@ -4,7 +4,11 @@
  */
 
 // Re-export snapshot types used throughout the ticker pipeline
-export type { BotSnapshot, BotMetrics, HealthSnapshot } from './health-snapshot.js';
+export type {
+  BotSnapshot,
+  BotMetrics,
+  HealthSnapshot,
+} from './health-snapshot.js';
 
 // ─── Config Types ───────────────────────────────────────────────────
 
@@ -102,7 +106,10 @@ export interface ArchetypeConfig {
   max_drawdown: number;
   typical_win_rate: number;
   typical_rr_ratio: number;
-  paper_validation: Record<string, { days: number; min_trades: number; min_live_sharpe: number }>;
+  paper_validation: Record<
+    string,
+    { days: number; min_trades: number; min_live_sharpe: number }
+  >;
 }
 
 export const LOW_WR_ARCHETYPES = [

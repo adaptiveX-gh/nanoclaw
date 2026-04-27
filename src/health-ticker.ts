@@ -12,7 +12,10 @@ import { parse as parseYaml } from 'yaml';
 
 import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { computeHealthSnapshot } from './health-snapshot.js';
-import { evaluateAllTriggers, getFirstFiredTrigger } from './health-triggers.js';
+import {
+  evaluateAllTriggers,
+  getFirstFiredTrigger,
+} from './health-triggers.js';
 import { evaluateGraduation } from './health-graduation.js';
 import { computeSignalDecision } from './health-signal-gating.js';
 import { reconcileState } from './health-reconcile.js';
@@ -59,7 +62,10 @@ function loadScoringConfig(): ScoringConfig | null {
   try {
     config = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
   } catch {
-    logger.error({ path: defaultsPath }, 'Failed to load scoring-config-defaults.json');
+    logger.error(
+      { path: defaultsPath },
+      'Failed to load scoring-config-defaults.json',
+    );
     return null;
   }
 
@@ -67,7 +73,11 @@ function loadScoringConfig(): ScoringConfig | null {
   try {
     if (fs.existsSync(GROUPS_DIR)) {
       for (const folder of fs.readdirSync(GROUPS_DIR)) {
-        const overridePath = path.join(GROUPS_DIR, folder, 'scoring-config.json');
+        const overridePath = path.join(
+          GROUPS_DIR,
+          folder,
+          'scoring-config.json',
+        );
         if (!fs.existsSync(overridePath)) continue;
         const overrides = JSON.parse(fs.readFileSync(overridePath, 'utf-8'));
         config = deepMerge(config, overrides);
@@ -126,14 +136,23 @@ function loadCampaigns(): any[] {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return [];
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const filePath = path.join(GROUPS_DIR, folder, 'research-planner', 'campaigns.json');
+      const filePath = path.join(
+        GROUPS_DIR,
+        folder,
+        'research-planner',
+        'campaigns.json',
+      );
       if (!fs.existsSync(filePath)) continue;
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         if (data.campaigns) all.push(...data.campaigns);
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return all;
 }
 
@@ -142,14 +161,23 @@ function loadDeployments(): any[] {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return [];
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const filePath = path.join(GROUPS_DIR, folder, 'auto-mode', 'deployments.json');
+      const filePath = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'deployments.json',
+      );
       if (!fs.existsSync(filePath)) continue;
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         if (data.deployments) all.push(...data.deployments);
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return all;
 }
 
@@ -157,11 +185,18 @@ function loadRoster(): any | null {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return null;
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const filePath = path.join(GROUPS_DIR, folder, 'auto-mode', 'roster.json');
+      const filePath = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'roster.json',
+      );
       if (!fs.existsSync(filePath)) continue;
       return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return null;
 }
 
@@ -169,11 +204,18 @@ function loadCellGrid(): any | null {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return null;
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const filePath = path.join(GROUPS_DIR, folder, 'reports', 'cell-grid-latest.json');
+      const filePath = path.join(
+        GROUPS_DIR,
+        folder,
+        'reports',
+        'cell-grid-latest.json',
+      );
       if (!fs.existsSync(filePath)) continue;
       return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return null;
 }
 
@@ -181,30 +223,49 @@ function loadMarketPrior(): any | null {
   try {
     if (!fs.existsSync(GROUPS_DIR)) return null;
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const filePath = path.join(GROUPS_DIR, folder, 'reports', 'market-prior.json');
+      const filePath = path.join(
+        GROUPS_DIR,
+        folder,
+        'reports',
+        'market-prior.json',
+      );
       if (!fs.existsSync(filePath)) continue;
       return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return null;
 }
 
 function loadTickId(): number {
   try {
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const depPath = path.join(GROUPS_DIR, folder, 'auto-mode', 'deployments.json');
+      const depPath = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'deployments.json',
+      );
       if (!fs.existsSync(depPath)) continue;
       const data = JSON.parse(fs.readFileSync(depPath, 'utf-8'));
       return (data._meta?.tick_count ?? 0) + 1;
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return 1;
 }
 
 function saveTickId(tickId: number): void {
   try {
     for (const folder of fs.readdirSync(GROUPS_DIR)) {
-      const depPath = path.join(GROUPS_DIR, folder, 'auto-mode', 'deployments.json');
+      const depPath = path.join(
+        GROUPS_DIR,
+        folder,
+        'auto-mode',
+        'deployments.json',
+      );
       if (!fs.existsSync(depPath)) continue;
       const data = JSON.parse(fs.readFileSync(depPath, 'utf-8'));
       if (!data._meta) data._meta = {};
@@ -212,7 +273,9 @@ function saveTickId(tickId: number): void {
       fs.writeFileSync(depPath, JSON.stringify(data, null, 2));
       break;
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 // ─── Cell Grid Composite Lookup ─────────────────────────────────────
@@ -225,9 +288,7 @@ function getCellComposite(
   if (!cellGrid?.cells) return 0;
   // Find the cell matching this archetype + pair
   const cell = cellGrid.cells.find(
-    (c: any) =>
-      c.archetype === archetype &&
-      c.pair === pair,
+    (c: any) => c.archetype === archetype && c.pair === pair,
   );
   return cell?.composite ?? cell?.composite_score ?? 0;
 }
@@ -238,7 +299,8 @@ function getBocpdData(
   marketPrior: any,
   pair: string,
 ): { changeProb: number | null; expectedRunLength: number | null } {
-  if (!marketPrior?.regimes) return { changeProb: null, expectedRunLength: null };
+  if (!marketPrior?.regimes)
+    return { changeProb: null, expectedRunLength: null };
 
   // Extract symbol from pair (e.g., "BTC/USDT" → "BTC")
   const symbol = pair.split('/')[0];
@@ -297,10 +359,18 @@ async function runTick(
   const marketPrior = loadMarketPrior();
 
   // b. RECONCILE
-  const { patches, orphans } = reconcileState(campaigns, deployments, roster, snapshot.bots);
+  const { patches, orphans } = reconcileState(
+    campaigns,
+    deployments,
+    roster,
+    snapshot.bots,
+  );
   if (patches.length > 0) {
     applyReconcilePatches(patches);
-    logger.info({ patchCount: patches.length }, 'Applied reconciliation patches');
+    logger.info(
+      { patchCount: patches.length },
+      'Applied reconciliation patches',
+    );
   }
   if (orphans.length > 0) {
     logger.warn({ orphans }, 'Orphaned deployments detected');
@@ -320,13 +390,19 @@ async function runTick(
   for (const bot of snapshot.bots) {
     const archetype = archetypes[bot.archetype ?? ''];
     if (!archetype) {
-      logger.warn({ strategy: bot.strategy, archetype: bot.archetype }, 'Unknown archetype');
+      logger.warn(
+        { strategy: bot.strategy, archetype: bot.archetype },
+        'Unknown archetype',
+      );
       continue;
     }
 
     // d. SIGNAL GATING
     const composite = getCellComposite(cellGrid, bot.archetype ?? '', bot.pair);
-    const { changeProb, expectedRunLength } = getBocpdData(marketPrior, bot.pair);
+    const { changeProb, expectedRunLength } = getBocpdData(
+      marketPrior,
+      bot.pair,
+    );
 
     const signalDecision = computeSignalDecision(
       bot.signals_active,
@@ -357,7 +433,12 @@ async function runTick(
     // Execute signal toggle if needed
     if (signalDecision.toggle !== 'none') {
       const enable = signalDecision.toggle === 'on';
-      await executeSignalToggle(deps, bot, enable, signalDecision.ticks_required);
+      await executeSignalToggle(
+        deps,
+        bot,
+        enable,
+        signalDecision.ticks_required,
+      );
       signalChanges.push({
         campaign_id: bot.campaign_id ?? bot.deployment_id,
         strategy: bot.strategy,
@@ -370,8 +451,12 @@ async function runTick(
     }
 
     // Update signal tick counters
-    const currentSignals = signalDecision.toggle === 'on' ? true :
-      signalDecision.toggle === 'off' ? false : bot.signals_active;
+    const currentSignals =
+      signalDecision.toggle === 'on'
+        ? true
+        : signalDecision.toggle === 'off'
+          ? false
+          : bot.signals_active;
     updateSignalTicks(
       bot.campaign_id ?? bot.deployment_id,
       currentSignals,
@@ -387,11 +472,19 @@ async function runTick(
       // Trigger H → evaluate graduation
       if (firedTrigger.id === 'H') {
         const campaign = campaigns.find(
-          (c: any) => c.id === bot.campaign_id || c.paper_trading?.bot_deployment_id === bot.deployment_id,
+          (c: any) =>
+            c.id === bot.campaign_id ||
+            c.paper_trading?.bot_deployment_id === bot.deployment_id,
         );
         const wfoMetrics = campaign ? getWfoMetrics(campaign) : null;
 
-        const gradResult = evaluateGraduation(bot, archetype, config, now, wfoMetrics);
+        const gradResult = evaluateGraduation(
+          bot,
+          archetype,
+          config,
+          now,
+          wfoMetrics,
+        );
 
         switch (gradResult.action) {
           case 'graduate': {
@@ -400,12 +493,18 @@ async function runTick(
             break;
           }
           case 'retire': {
-            const t = await executeRetirement(deps, bot, gradResult.reason, 'H');
+            const t = await executeRetirement(
+              deps,
+              bot,
+              gradResult.reason,
+              'H',
+            );
             transitions.push(t);
             break;
           }
           case 'extend': {
-            const deadlineDays = config.SLOT_MANAGEMENT.trial_deadlines_days[bot.timeframe] ?? 7;
+            const deadlineDays =
+              config.SLOT_MANAGEMENT.trial_deadlines_days[bot.timeframe] ?? 7;
             const extensionDays = Math.ceil(deadlineDays * 0.5);
             writeValidationExtension(
               bot.campaign_id ?? bot.deployment_id,
@@ -414,11 +513,16 @@ async function runTick(
               { extended: true },
             );
             const msg = `${bot.strategy} has ${bot.metrics.trade_count} trades at deadline. Extending by ${extensionDays} days.`;
-            try { await deps.sendMessage(deps.chatJid, msg); } catch { /* ignore */ }
+            try {
+              await deps.sendMessage(deps.chatJid, msg);
+            } catch {
+              /* ignore */
+            }
             break;
           }
           case 'extend_regime': {
-            const deadlineDays = config.SLOT_MANAGEMENT.trial_deadlines_days[bot.timeframe] ?? 7;
+            const deadlineDays =
+              config.SLOT_MANAGEMENT.trial_deadlines_days[bot.timeframe] ?? 7;
             writeValidationExtension(
               bot.campaign_id ?? bot.deployment_id,
               deadlineDays,
@@ -426,15 +530,21 @@ async function runTick(
               { regime_extension: true },
             );
             const totalTicks = bot.ticks_signals_on + bot.ticks_signals_off;
-            const blockedPct = totalTicks > 0
-              ? ((bot.ticks_signals_off / totalTicks) * 100).toFixed(0)
-              : '100';
+            const blockedPct =
+              totalTicks > 0
+                ? ((bot.ticks_signals_off / totalTicks) * 100).toFixed(0)
+                : '100';
             const msg = `${bot.strategy} was regime-blocked ${blockedPct}%. Resetting validation clock (+${deadlineDays} days).`;
-            try { await deps.sendMessage(deps.chatJid, msg); } catch { /* ignore */ }
+            try {
+              await deps.sendMessage(deps.chatJid, msg);
+            } catch {
+              /* ignore */
+            }
             break;
           }
           case 'investigate_rr': {
-            const deadlineDays = config.SLOT_MANAGEMENT.trial_deadlines_days[bot.timeframe] ?? 7;
+            const deadlineDays =
+              config.SLOT_MANAGEMENT.trial_deadlines_days[bot.timeframe] ?? 7;
             writeValidationExtension(
               bot.campaign_id ?? bot.deployment_id,
               deadlineDays,
@@ -442,19 +552,37 @@ async function runTick(
               { rr_extension: true },
             );
             const msg = `${bot.strategy} passed trade count and Sharpe gates but R:R is inverted. Extending + routing to kata.`;
-            try { await deps.sendMessage(deps.chatJid, msg); } catch { /* ignore */ }
+            try {
+              await deps.sendMessage(deps.chatJid, msg);
+            } catch {
+              /* ignore */
+            }
             break;
           }
           // 'none' = overfitting/execution block, do nothing
         }
       } else if (firedTrigger.action === 'retire') {
-        const t = await executeRetirement(deps, bot, firedTrigger.reason, firedTrigger.id);
+        const t = await executeRetirement(
+          deps,
+          bot,
+          firedTrigger.reason,
+          firedTrigger.id,
+        );
         transitions.push(t);
       } else if (firedTrigger.action === 'pause') {
-        await executePause(deps, bot, firedTrigger.reason, firedTrigger.obstacle ?? firedTrigger.reason);
+        await executePause(
+          deps,
+          bot,
+          firedTrigger.reason,
+          firedTrigger.obstacle ?? firedTrigger.reason,
+        );
       } else if (firedTrigger.action === 'warn') {
         const msg = `WARNING: ${bot.strategy} on ${bot.pair}/${bot.timeframe} — ${firedTrigger.details ?? firedTrigger.reason}`;
-        try { await deps.sendMessage(deps.chatJid, msg); } catch { /* ignore */ }
+        try {
+          await deps.sendMessage(deps.chatJid, msg);
+        } catch {
+          /* ignore */
+        }
       }
 
       continue; // Skip early graduation check for bots with fired triggers
@@ -463,10 +591,18 @@ async function runTick(
     // f. EARLY GRADUATION (only for trials without fired triggers)
     if (bot.slot_state === 'trial') {
       const campaign = campaigns.find(
-        (c: any) => c.id === bot.campaign_id || c.paper_trading?.bot_deployment_id === bot.deployment_id,
+        (c: any) =>
+          c.id === bot.campaign_id ||
+          c.paper_trading?.bot_deployment_id === bot.deployment_id,
       );
       const wfoMetrics = campaign ? getWfoMetrics(campaign) : null;
-      const gradResult = evaluateGraduation(bot, archetype, config, now, wfoMetrics);
+      const gradResult = evaluateGraduation(
+        bot,
+        archetype,
+        config,
+        now,
+        wfoMetrics,
+      );
 
       if (gradResult.action === 'graduate') {
         const t = await executeGraduation(deps, bot, gradResult.reason);
@@ -481,7 +617,7 @@ async function runTick(
   }
   if (
     snapshot.portfolio_win_rate != null &&
-    snapshot.portfolio_win_rate < 0.30 &&
+    snapshot.portfolio_win_rate < 0.3 &&
     snapshot.total_trade_count >= 10
   ) {
     escalations.push('portfolio_emergency_audit');
@@ -489,7 +625,12 @@ async function runTick(
 
   // h. BUILD SLOT SUMMARY
   const activeBots = snapshot.bots.filter(
-    (b) => !transitions.some((t) => t.campaign_id === (b.campaign_id ?? b.deployment_id) && t.to_state === 'retired'),
+    (b) =>
+      !transitions.some(
+        (t) =>
+          t.campaign_id === (b.campaign_id ?? b.deployment_id) &&
+          t.to_state === 'retired',
+      ),
   );
   const byGroup: Record<string, number> = {};
   for (const b of activeBots) {
@@ -518,9 +659,12 @@ async function runTick(
   saveTickId(tickId);
   stampTickCompletion();
 
-  const verdict = transitions.length > 0
-    ? (transitions.some((t) => t.to_state.startsWith('graduated')) ? 'graduation' : 'retirement')
-    : 'healthy';
+  const verdict =
+    transitions.length > 0
+      ? transitions.some((t) => t.to_state.startsWith('graduated'))
+        ? 'graduation'
+        : 'retirement'
+      : 'healthy';
 
   logger.info(
     {
@@ -539,7 +683,16 @@ async function runTick(
     fs.mkdirSync(TICKER_DATA_DIR, { recursive: true });
     fs.writeFileSync(
       path.join(TICKER_DATA_DIR, 'escalation.json'),
-      JSON.stringify({ tick_id: tickId, escalations, transitions, timestamp: now.toISOString() }, null, 2),
+      JSON.stringify(
+        {
+          tick_id: tickId,
+          escalations,
+          transitions,
+          timestamp: now.toISOString(),
+        },
+        null,
+        2,
+      ),
     );
   }
 }
@@ -562,7 +715,10 @@ export function startHealthTicker(deps: HealthTickerDeps): void {
   }
 
   logger.info(
-    { intervalMs: TICKER_INTERVAL_MS, archetypeCount: Object.keys(archetypes).length },
+    {
+      intervalMs: TICKER_INTERVAL_MS,
+      archetypeCount: Object.keys(archetypes).length,
+    },
     'Health ticker started',
   );
 
