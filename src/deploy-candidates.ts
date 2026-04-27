@@ -56,9 +56,7 @@ function lookupGapScore(
   if (!gapReport?.top_gaps) return 1.0;
   const gap = gapReport.top_gaps.find(
     (g: any) =>
-      g.archetype === archetype &&
-      g.pair === pair &&
-      g.timeframe === timeframe,
+      g.archetype === archetype && g.pair === pair && g.timeframe === timeframe,
   );
   return gap?.gap_score ?? 1.0;
 }
@@ -88,7 +86,8 @@ function gatherFromCampaigns(
       correlation_group: arch.correlation_group,
       source: 'kata_graduated',
       quality: 1.5,
-      favorable_sharpe: c.triage?.favorable_sharpe ?? c.favorable_sharpe ?? null,
+      favorable_sharpe:
+        c.triage?.favorable_sharpe ?? c.favorable_sharpe ?? null,
       gap_score: lookupGapScore(gapReport, c.archetype, c.pair, c.timeframe),
       deployment_failures: countDeploymentFailures(
         campaigns,
@@ -135,12 +134,7 @@ function gatherFromRoster(
           quality: 1.5,
           favorable_sharpe:
             r.wf_sharpe ?? r.kata_score ?? r.favorable_sharpe ?? null,
-          gap_score: lookupGapScore(
-            gapReport,
-            r.archetype,
-            pair,
-            r.timeframe,
-          ),
+          gap_score: lookupGapScore(gapReport, r.archetype, pair, r.timeframe),
           deployment_failures: countDeploymentFailures(
             campaigns,
             r.archetype,
@@ -285,11 +279,7 @@ function gatherFromCompetition(
     if (entry.status !== 'active') continue;
     if (entry.expires_at && new Date(entry.expires_at) <= now) continue;
     if (
-      isDuplicate(
-        candidates,
-        entry.strategy_name ?? entry.strategy,
-        entry.pair,
-      )
+      isDuplicate(candidates, entry.strategy_name ?? entry.strategy, entry.pair)
     )
       continue;
 
@@ -368,14 +358,15 @@ export function rankCandidates(
     groupCounts[group] = (groupCounts[group] ?? 0) + 1;
   }
 
-  const qualityMultipliers: Record<string, number> =
-    (config.SLOT_MANAGEMENT as any).candidate_quality_multipliers ?? {
-      kata_graduated: 1.5,
-      roster_graduated: 1.5,
-      competition_queue: 1.3,
-      qualifier: 1.2,
-      untested: 1.0,
-    };
+  const qualityMultipliers: Record<string, number> = (
+    config.SLOT_MANAGEMENT as any
+  ).candidate_quality_multipliers ?? {
+    kata_graduated: 1.5,
+    roster_graduated: 1.5,
+    competition_queue: 1.3,
+    qualifier: 1.2,
+    untested: 1.0,
+  };
 
   for (const c of candidates) {
     let score = c.gap_score;
@@ -400,5 +391,7 @@ export function rankCandidates(
   }
 
   // Sort descending by ranked_score
-  return candidates.sort((a, b) => (b.ranked_score ?? 0) - (a.ranked_score ?? 0));
+  return candidates.sort(
+    (a, b) => (b.ranked_score ?? 0) - (a.ranked_score ?? 0),
+  );
 }

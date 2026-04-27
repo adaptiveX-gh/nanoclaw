@@ -251,10 +251,7 @@ export async function runVerificationBacktest(
       regime_blocked: false,
     };
   } catch (err) {
-    logger.warn(
-      { err, strategy, pair },
-      'Verification backtest failed',
-    );
+    logger.warn({ err, strategy, pair }, 'Verification backtest failed');
     return {
       passed: false,
       trade_count: 0,
@@ -289,10 +286,7 @@ export function checkVerificationGates(
     };
   }
 
-  if (
-    currentRegime &&
-    archetype.anti_regimes.includes(currentRegime)
-  ) {
+  if (currentRegime && archetype.anti_regimes.includes(currentRegime)) {
     return {
       passed: false,
       reason: `regime ${currentRegime} in anti_regimes`,

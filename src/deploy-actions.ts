@@ -60,9 +60,7 @@ export function loadCandidateQueue(): any[] {
   try {
     if (!fs.existsSync(filePath)) return [];
     const lines = fs.readFileSync(filePath, 'utf-8').trim().split('\n');
-    return lines
-      .filter((l) => l.trim())
-      .map((l) => JSON.parse(l));
+    return lines.filter((l) => l.trim()).map((l) => JSON.parse(l));
   } catch {
     return [];
   }
@@ -299,10 +297,7 @@ export function allocateSeasonCapital(
   const total = season.capital_allocation.total_usdt ?? 0;
   if (remaining <= 0 || total <= 0) return;
 
-  let allocated = Math.min(
-    remaining / Math.max(trialRoom + 1, 1),
-    total * 0.2,
-  );
+  let allocated = Math.min(remaining / Math.max(trialRoom + 1, 1), total * 0.2);
   allocated = Math.max(allocated, total * 0.05);
   allocated = Math.min(allocated, remaining);
 
@@ -538,11 +533,7 @@ export async function executeReplacement(
       }
 
       // Update deployments
-      const depPath = path.join(
-        groupDir,
-        'auto-mode',
-        'deployments.json',
-      );
+      const depPath = path.join(groupDir, 'auto-mode', 'deployments.json');
       const depData = readJsonFile(depPath);
       if (depData?.deployments) {
         for (const d of depData.deployments) {

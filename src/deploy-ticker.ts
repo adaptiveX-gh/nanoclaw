@@ -47,10 +47,7 @@ const MAX_VERIFICATIONS_PER_TICK = 3;
 
 // ─── Current Regime Lookup ──────────────────────────────────────────
 
-function getCurrentRegime(
-  cellGrid: any,
-  pair: string,
-): string | null {
+function getCurrentRegime(cellGrid: any, pair: string): string | null {
   if (!cellGrid?.cells) return null;
   const cell = cellGrid.cells.find((c: any) => c.pair === pair);
   return cell?.regime ?? null;
@@ -138,7 +135,10 @@ async function runDeployTick(
     `Slots: ${slots.graduated}G + ${slots.trials}T = ${slots.total}/${config.SLOT_MANAGEMENT.max_total_bots} (trial_room ${slots.trial_room})`,
   );
 
-  if (slots.trial_room <= 0 && slots.total >= config.SLOT_MANAGEMENT.max_total_bots) {
+  if (
+    slots.trial_room <= 0 &&
+    slots.total >= config.SLOT_MANAGEMENT.max_total_bots
+  ) {
     logger.info('Slots full — checking replacements only');
   }
 
@@ -189,7 +189,8 @@ async function runDeployTick(
   let verificationsThisTick = 0;
   const groupCounts = countByGroup(deployments);
   const maxPerGroup = config.SLOT_MANAGEMENT.max_per_group;
-  const minVerifyWinRate = (config as any).DEPLOY_VERIFICATION?.min_win_rate ?? 0.3;
+  const minVerifyWinRate =
+    (config as any).DEPLOY_VERIFICATION?.min_win_rate ?? 0.3;
 
   for (const candidate of ranked) {
     if (trialRoom <= 0) break;
@@ -289,8 +290,9 @@ async function runDeployTick(
 
     for (const candidate of cellCandidates) {
       const sharpeImprovement =
-        (candidate.triage?.favorable_sharpe ?? candidate.favorable_sharpe ?? 0) -
-        (dep.live_sharpe ?? dep.wfo_sharpe ?? 0);
+        (candidate.triage?.favorable_sharpe ??
+          candidate.favorable_sharpe ??
+          0) - (dep.live_sharpe ?? dep.wfo_sharpe ?? 0);
 
       if (sharpeImprovement <= replacementThreshold) continue;
 
@@ -306,7 +308,9 @@ async function runDeployTick(
         source: 'kata_graduated' as const,
         quality: 1.5,
         favorable_sharpe:
-          candidate.triage?.favorable_sharpe ?? candidate.favorable_sharpe ?? null,
+          candidate.triage?.favorable_sharpe ??
+          candidate.favorable_sharpe ??
+          null,
         gap_score: 1.0,
         deployment_failures: 0,
       };
@@ -387,10 +391,7 @@ export function startDeployTicker(deps: DeployTickerDeps): void {
     return;
   }
 
-  logger.info(
-    { intervalMs: TICKER_INTERVAL_MS },
-    'Deploy ticker started',
-  );
+  logger.info({ intervalMs: TICKER_INTERVAL_MS }, 'Deploy ticker started');
 
   // Delay first run by 7 minutes to stagger from health-ticker
   const INITIAL_DELAY_MS = 7 * 60 * 1000;

@@ -215,14 +215,15 @@ export function startDataDownloader(): void {
 
   const delayMs = nextRun.getTime() - now.getTime();
   logger.info(
-    { nextRunAt: nextRun.toISOString(), delayMinutes: Math.round(delayMs / 60000) },
+    {
+      nextRunAt: nextRun.toISOString(),
+      delayMinutes: Math.round(delayMs / 60000),
+    },
     'First download scheduled',
   );
 
   setTimeout(() => {
-    runDownload().catch((err) =>
-      logger.error({ err }, 'Data download failed'),
-    );
+    runDownload().catch((err) => logger.error({ err }, 'Data download failed'));
 
     // Then every 24 hours
     downloadTimer = setInterval(() => {
