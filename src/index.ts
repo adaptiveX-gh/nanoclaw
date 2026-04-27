@@ -47,7 +47,8 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
-import { startBotRunner } from './bot-runner.js';
+import { startBotRunner, stopBotContainer, toggleBotSignals } from './bot-runner.js';
+import { startHealthTicker } from './health-ticker.js';
 import { startKataRunner } from './kata-runner.js';
 import { startConsoleSync } from './console-sync.js';
 import { startTvWebhook } from './tv-webhook.js';
@@ -658,6 +659,26 @@ async function main(): Promise<void> {
   });
   startKataRunner();
   startConsoleSync(getDb(), DATA_DIR);
+
+  // Health ticker — deterministic monitor-health replacement
+  const mainGroupJid = Object.keys(registeredGroups)[0] ?? '';
+  if (mainGroupJid) {
+    startHealthTicker({
+      stopBotContainer,
+      toggleBotSignals,
+      sendMessage: async (jid, rawText) => {
+        const channel = findChannel(channels, jid);
+        if (!channel) {
+          logger.warn({ jid }, 'Health ticker: no channel owns JID');
+          return;
+        }
+        const text = formatOutbound(rawText);
+        if (text) await channel.sendMessage(jid, text);
+      },
+      chatJid: mainGroupJid,
+    });
+  }
+
   startTvWebhook({
     injectSystemMessage: (jid, text) => {
       const now = new Date(Date.now() + 1);

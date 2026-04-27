@@ -21,7 +21,7 @@ const SNAPSHOT_PATH = path.join(DATA_DIR, 'bot-runner', 'health-snapshot.json');
 
 // ─── Types ──────────────────────────────────────────────────────────
 
-interface BotMetrics {
+export interface BotMetrics {
   profit_pct: number;
   trade_count: number;
   win_rate: number;
@@ -36,7 +36,7 @@ interface BotMetrics {
   daily_equity: Array<{ date: string; cumulative_pnl_pct: number }> | null;
 }
 
-interface BotSnapshot {
+export interface BotSnapshot {
   deployment_id: string;
   strategy: string;
   pair: string;

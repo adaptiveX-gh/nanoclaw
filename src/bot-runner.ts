@@ -799,7 +799,7 @@ async function startBotContainer(req: BotRequest): Promise<BotInstance> {
   }
 }
 
-async function stopBotContainer(deploymentId: string): Promise<void> {
+export async function stopBotContainer(deploymentId: string): Promise<void> {
   const bot = activeBots.get(deploymentId);
   if (!bot) {
     // Try to stop by container name anyway
@@ -835,7 +835,7 @@ async function stopBotContainer(deploymentId: string): Promise<void> {
   dropEnrichmentDeployment(deploymentId);
 }
 
-async function toggleBotSignals(
+export async function toggleBotSignals(
   deploymentId: string,
   enable: boolean,
 ): Promise<void> {
