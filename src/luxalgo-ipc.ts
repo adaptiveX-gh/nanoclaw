@@ -24,7 +24,7 @@ interface SkillResult {
 }
 
 const DEFAULT_TIMEOUT = 120000;
-const CHAT_TIMEOUT = 180000; // 3 minutes for LLM streaming responses
+const CHAT_TIMEOUT = 240000; // 4 minutes — headroom for navigation + 90s streaming wait
 
 function runScript(
   script: string,
@@ -192,6 +192,14 @@ export async function handleLuxAlgoIpc(
 
     case 'luxalgo_get_history':
       result = await runScript('get-history', {});
+      break;
+
+    case 'luxalgo_dump_dom':
+      result = await runScript(
+        'dump-dom',
+        { message: data.message || 'Say hello in one sentence.' },
+        CHAT_TIMEOUT,
+      );
       break;
 
     default:

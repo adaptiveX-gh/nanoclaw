@@ -904,7 +904,8 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
         | Array<{ date: string; cumulative_pnl_pct: number }>
         | undefined = prevPnl?.daily_equity;
       let enrichedTrades: EnrichedTrade[] | undefined =
-        prevPnl?.enriched_trades;
+        prevPnl?.enriched_trades?.filter(t => t.closed_at !== null);
+      let openTradesRaw: FtTradeLike[] = [];
       try {
         const tradesRes = await ftApiCall(
           bot.port,
@@ -965,9 +966,10 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
         if (statusRes.status === 200) {
           const openTrades = JSON.parse(statusRes.body);
           if (Array.isArray(openTrades) && openTrades.length > 0) {
+            openTradesRaw = openTrades as FtTradeLike[];
             const deployment = readDeployment(bot.deploymentId);
             const marketPrior = readMarketPrior();
-            for (const ot of openTrades as FtTradeLike[]) {
+            for (const ot of openTradesRaw) {
               stampOpenTrade(bot.deploymentId, ot, marketPrior, deployment);
             }
           }
@@ -992,6 +994,27 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
         enrichedTrades && enrichedTrades.length > 0
           ? computeExecutionDrag(enrichedTrades)
           : null;
+
+      // Enrich open trades and append for dashboard P&L visibility.
+      // Stats above use closed-only enrichedTrades; open trades are added
+      // after so they don't pollute by_regime / execution_drag computations.
+      if (openTradesRaw.length > 0) {
+        try {
+          const dep = readDeployment(bot.deploymentId);
+          const mp = readMarketPrior();
+          const enrichedOpen = enrichTrades(
+            bot.deploymentId,
+            openTradesRaw,
+            mp,
+            dep,
+            dep?.archetype ?? null,
+            bot.timeframe ?? null,
+          );
+          enrichedTrades = [...(enrichedTrades || []), ...enrichedOpen];
+        } catch {
+          // Non-critical — dashboard degrades to closed-only
+        }
+      }
 
       pnl = {
         profit_pct: profit.profit_all_percent || 0,
@@ -1143,7 +1166,8 @@ async function postTradeEvent(
   // The enriched_trades array in paper_pnl is populated by getBotStatus and
   // carries per-trade regime@entry, MAE, MFE, holding minutes etc.
   const enrichedList = status.paper_pnl?.enriched_trades || [];
-  const lastEnriched = enrichedList[enrichedList.length - 1];
+  const closedList = enrichedList.filter((t: any) => t.closed_at !== null);
+  const lastEnriched = closedList[closedList.length - 1];
 
   const body = {
     agent_id: agentId || undefined,

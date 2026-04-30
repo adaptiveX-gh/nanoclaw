@@ -207,7 +207,9 @@ function extractMetrics(botStatus: any): BotMetrics {
   let avgLoss: number | null = null;
   let maxConsecLosses: number | null = null;
 
-  const trades = pnl.enriched_trades || [];
+  const trades = (pnl.enriched_trades || []).filter(
+    (t: any) => t.closed_at !== null,
+  );
   if (trades.length > 0) {
     const wins = trades.filter(
       (t: any) => (t.profit_ratio ?? t.profit_pct ?? 0) > 0,
