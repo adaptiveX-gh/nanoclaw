@@ -268,6 +268,25 @@ of entries — older entries can be rotated but that's secondary.
 
 ### Step 1: READ STATE
 
+**Health snapshot shortcut:** Before reading individual state files, check for
+`/workspace/extra/bot-runner/health-snapshot.json`. If it exists and `computed_at`
+is less than 2 minutes old, use it as a pre-joined view of bot metrics + campaign
+state. This eliminates the need for per-bot `bot_status()`, `bot_profit()`, and
+`bot_trades()` calls in Steps 1 and 3. The snapshot contains:
+- `bots[]` — per-bot: deployment_id, strategy, pair, timeframe, bot_status,
+  signals_active, metrics (pnl, trades, win_rate, sharpe, drawdown, avg_win/loss,
+  consecutive_losses, execution_quality, by_regime), campaign state, archetype,
+  slot_state, deadlines, hysteresis counters, flags, divergence, eviction_priority
+- `active_slot_count`, `total_trade_count`, `portfolio_win_rate`
+- `cell_grid_stale`, `cell_grid_age_hours`
+
+If the snapshot is available and fresh, skip the per-bot MCP calls below and in
+Step 3. Use the snapshot's `bots[].metrics` directly. Still read campaigns.json,
+market-prior.json, and other state files normally for fields the snapshot doesn't
+cover (e.g., full campaign arrays for reconciliation).
+
+If the snapshot is missing or stale (> 2 min), fall back to the standard flow below.
+
 Read campaigns.json, market-prior.json, portfolio-correlation.json, config.json,
 cell-grid-latest.json, and tv-signals.json.
 
@@ -576,6 +595,11 @@ of graduation status — a proven bot in an unfavorable regime pauses
 signals until conditions improve. (No tick tracking needed for proven bots.)
 
 ### Step 3: UPDATE METRICS
+
+**If health snapshot was used in Step 1**, skip the `bot_profit()` and
+`bot_trades()` calls below — all metrics are already in `bots[].metrics`.
+Use the snapshot values directly and proceed to the divergence computation
+and inactive bot detection.
 
 For each warm-up bot:
 ```
@@ -1034,6 +1058,19 @@ dep.retired_reason = reason
 write auto-mode/deployments.json
 sync_state_to_supabase(state_key="deployments", ...)
 
+# Return capital to season pool (if season active)
+season = read auto-mode/season.json (gracefully skip if missing)
+if season exists AND season.status == "active" AND season.capital_allocation is not null:
+  cap_dep = find in season.capital_allocation.deployments
+            where deployment_id == campaign.paper_trading.bot_deployment_id
+            AND retired_at is null
+  if cap_dep:
+    cap_dep.retired_at = now
+    season.capital_allocation.remaining_usdt += cap_dep.allocated_usdt
+    season.capital_allocation.allocated_usdt -= cap_dep.allocated_usdt
+    write auto-mode/season.json
+    Log: "Season capital: returned {cap_dep.allocated_usdt:.0f} USDT from {campaign.strategy}. Remaining: {season.capital_allocation.remaining_usdt:.0f}/{season.capital_allocation.total_usdt:.0f}"
+
 # Update roster.json cell status (roster tracks pre-staged deployment state)
 roster = read auto-mode/roster.json (gracefully skip if missing)
 if roster:
@@ -1109,6 +1146,34 @@ warmup/proven/published/retired counts, transitions[], slots_filled.
 
 **Sync ALL state files:** campaigns, deployments, triage_matrix, roster,
 portfolio_correlation, kata_state, tv_signals, market_prior, regime_transitions, season.
+
+**Auto-memory write (MANDATORY):** Write a compact structured summary to
+`~/.claude/memory/monitor-health.md` using the Write tool. Keep under 300 tokens.
+Claude Code loads this file automatically at the start of the next session, giving the
+next tick instant situational context without re-reading all state files.
+
+Required format:
+```
+# Monitor-Health Tick Summary
+Updated: {ISO timestamp} | Tick #{tick_count} | Verdict: {healthy|retirement|graduation|mixed}
+
+## Decisions This Tick
+{list retirements, graduations, triggers fired — or "none" if clean tick}
+
+## Pending Attention
+{list bots near deadlines, empty groups, anomalies flagged — or "none"}
+
+## Portfolio State
+Slots: {trial_count} trial / {graduated_count} graduated / {total} total
+Groups: trend{✓/✗} range{✓/✗} vol{✓/✗} carry{✓/✗}
+Next candidate: {top undeployed from roster, or "none"}
+
+## Next Tick Notes
+{deferred decisions, anomalies to recheck, anything worth flagging}
+```
+
+At tick start (Step 0), if `~/.claude/memory/monitor-health.md` exists, read it briefly
+and note whether any "Pending Attention" items have resolved before proceeding.
 
 **Tick completion stamp (MANDATORY):** Write `deployments._meta.last_tick = now`,
 clear `last_tick_failure`. Append tick_complete to `tick-log.jsonl`.

@@ -313,16 +313,39 @@ sync_state_to_supabase(state_key="portfolio_audit", ...)
 competition_state = read auto-mode/competition-state.json
 if competition_state exists AND competition_state.active == true:
 
-  # 1. BTC benchmark
+  # 1. BTC benchmark (capital-denominated)
   btc_start_price = competition_state.benchmark.start_price
+  start_capital = competition_state.benchmark.start_capital_usdt ?? 10000
+  btc_units = competition_state.benchmark.btc_units ?? (start_capital / btc_start_price)
   btc_current_price = fetch current BTC/USDT price via exchange API
-  btc_return_pct = ((btc_current_price - btc_start_price) / btc_start_price) * 100
 
-  # 2. Portfolio return
-  # Sum paper trading P&L across all active bots (from campaign paper_pnl data)
-  portfolio_return_pct = sum of all bot P&L as % of starting capital
+  btc_value_now = btc_units * btc_current_price
+  btc_return_pct = ((btc_value_now - start_capital) / start_capital) * 100
 
-  # 3. Alpha
+  # 2. Portfolio return (season-scoped: only trades opened AND closed within season)
+  season = read auto-mode/season.json (or null)
+  season_start = season.started_at if season else competition_state.activated_at
+
+  portfolio_total_pnl_usdt = 0
+  for each campaign where state != "retired" OR (state == "retired" AND evicted_at >= season_start):
+    trades = bot_trades(campaign.paper_trading.bot_deployment_id)
+    season_trades = [t for t in trades
+                     if t.open_date >= season_start
+                     AND t.close_date is not null
+                     AND t.close_date <= now]
+    pnl_usdt = sum(t.profit_abs ?? (t.profit_pct / 100 * t.stake_amount) for t in season_trades)
+    portfolio_total_pnl_usdt += pnl_usdt
+
+    # Store per-campaign season stats for dashboard use in Step 8e
+    campaign.paper_trading.season_trade_count = len(season_trades)
+    campaign.paper_trading.season_pnl_usdt = pnl_usdt
+    campaign.paper_trading.season_win_rate = (
+      len([t for t in season_trades if (t.profit_abs ?? t.profit_pct) > 0]) / len(season_trades)
+    ) if season_trades else null
+
+  portfolio_return_pct = (portfolio_total_pnl_usdt / start_capital) * 100
+
+  # 3. Alpha (both sides denominated against the same season capital)
   alpha_pct = portfolio_return_pct - btc_return_pct
 
   # 4. Reflect on Last Step (Toyota Kata)
@@ -572,11 +595,26 @@ win_rates = [
 ]
 win_rate_range = [min(win_rates), max(win_rates)] if win_rates else null
 
+# Season-scoped win rates (from daily rollup trade filter)
+season_win_rates = [
+  c.paper_trading.season_win_rate
+  for c in active_campaigns
+  if c.paper_trading is not null and c.paper_trading.season_win_rate is not null
+]
+season_win_rate_range = [min(season_win_rates), max(season_win_rates)] if season_win_rates else null
+season_trade_count = sum(
+  c.paper_trading.season_trade_count or 0
+  for c in active_campaigns
+  if c.paper_trading is not null
+)
+
 season.dashboard.quality_signals = {
   avg_backtest_divergence_pct: avg_divergence,
   dsr_margin_avg: dsr_margin_avg,
   pbo_margin_avg: pbo_margin_avg,
-  win_rate_range: win_rate_range
+  win_rate_range: win_rate_range,
+  season_trade_count: season_trade_count,
+  season_win_rate_range: season_win_rate_range
 }
 ```
 
@@ -683,6 +721,18 @@ for g in thin_groups:
     message: f"{g.upper()} group has only 1 strategy ({strat}), target 2+"
   })
 
+# 7. Bot with 0 season trades (not contributing to season P&L)
+for c in active_campaigns:
+  if (c.paper_trading is not null
+      and (c.paper_trading.season_trade_count ?? 0) == 0
+      and c.paper_trading.deployed_at is not null
+      and (now - c.paper_trading.deployed_at).days >= 3):
+    elapsed_days = (now - c.paper_trading.deployed_at).days
+    concerns.append({
+      severity: "low",
+      message: f"{c.strategy}: 0 season trades after {elapsed_days}d — not contributing to season P&L"
+    })
+
 season.dashboard.concerns = concerns
 ```
 
@@ -735,3 +785,19 @@ After completing portfolio analysis:
    - Competition scorecard (if active)
    - Any portfolio diagnosis issues
    - Daily briefing path
+
+4. Write auto-memory summary to `~/.claude/memory/monitor-portfolio.md`:
+   ```
+   # Monitor-Portfolio Tick Summary
+   Updated: {ISO timestamp} | Day {day_number}/{duration_days}
+
+   ## Portfolio Health
+   Sharpe estimate: {value} | Correlation: {value} | CVaR: {value}
+   Circuit breaker: {armed|safe} | Concerns: {count}
+
+   ## Season Progress
+   Alpha: {alpha_pct}% | Score: {score_pct}% | Knowledge velocity: {net_per_day}/day
+
+   ## Next Tick Notes
+   {any open concerns, regime warnings, or items to recheck next run}
+   ```

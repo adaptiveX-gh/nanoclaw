@@ -410,6 +410,29 @@ for cand in ranked:
   dep_record.trades_since_deploy = 0
   write auto-mode/deployments.json
 
+  # Season capital tracking (if season active)
+  season = read auto-mode/season.json (gracefully skip if missing)
+  if season exists AND season.status == "active" AND season.capital_allocation is not null:
+    remaining = season.capital_allocation.remaining_usdt
+    total = season.capital_allocation.total_usdt
+    # Allocate proportionally — leave room for future deployments
+    open_trial_room = trial_room  # already decremented above
+    allocated = min(remaining / max(open_trial_room + 1, 1), total * 0.20)
+    allocated = max(allocated, total * 0.05)  # floor: at least 5% of total
+    season.capital_allocation.allocated_usdt += allocated
+    season.capital_allocation.remaining_usdt -= allocated
+    season.capital_allocation.deployments.append({
+      deployment_id: dep_record.id,
+      strategy: cand.strategy,
+      pair: cand.pair,
+      timeframe: cand.timeframe,
+      allocated_usdt: allocated,
+      deployed_at: now,
+      retired_at: null
+    })
+    write auto-mode/season.json
+    Log: "Season capital: allocated {allocated:.0f} USDT to {cand.strategy}. Remaining: {remaining - allocated:.0f}/{total:.0f}"
+
   trial_room      -= 1
   deployed_this_tick += 1
 

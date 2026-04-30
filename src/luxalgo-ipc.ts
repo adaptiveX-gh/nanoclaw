@@ -184,6 +184,28 @@ export async function handleLuxAlgoIpc(
         { message: data.message, archetype: data.archetype },
         CHAT_TIMEOUT,
       );
+      // Auto-reauth: if session expired, run setup (opens visible Chrome
+      // for manual login, 5 min window), then retry the original chat.
+      if (
+        !result.success &&
+        result.message.toLowerCase().includes('session expired')
+      ) {
+        logger.info({ requestId }, 'Session expired — auto-triggering setup');
+        const setupResult = await runScript('setup', {}, 330000); // 5.5 min
+        if (setupResult.success) {
+          logger.info({ requestId }, 'Re-auth succeeded — retrying chat');
+          result = await runScript(
+            'chat',
+            { message: data.message, archetype: data.archetype },
+            CHAT_TIMEOUT,
+          );
+        } else {
+          result = {
+            success: false,
+            message: `Session expired and re-auth failed: ${setupResult.message}`,
+          };
+        }
+      }
       break;
 
     case 'luxalgo_new_conversation':

@@ -136,6 +136,7 @@
   "SEASON": {
     "_comment": "28-day performance season. One active at a time. Created by add-season installer. Dashboard computed by monitor-portfolio Step 8e.",
     "duration_days": 28,
+    "season_capital_usdt": 10000,
     "concern_thresholds": {
       "group_coverage_min": 3,
       "divergence_warn_pct": 0.25,

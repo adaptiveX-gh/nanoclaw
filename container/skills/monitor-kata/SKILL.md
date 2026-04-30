@@ -52,6 +52,7 @@ Files written:
 - `auto-mode/deployments.json` — new deployment record
 - `research-planner/kata-state.json` — outcome updates
 - `auto-mode/tick-log.jsonl` — step trace (append)
+- `knowledge/anti-patterns.jsonl` — race-level anti-pattern entry (append)
 
 ## Console Sync — Mandatory
 
@@ -77,7 +78,20 @@ Run compound 4-window walk-forward (1 bash call)
 Compute favorable_sharpe
 If >= 0.5: deploy paper bot
 If >= 0.3: deploy with lower confidence
-If < 0.3: close Kata, log learnings
+If < 0.3: close Kata, write race-level anti-pattern to knowledge/anti-patterns.jsonl:
+  {
+    "archetype": race.target.archetype,
+    "pair":      race.target.pair,
+    "timeframe": race.target.timeframe,
+    "obstacle":  "race_zero_score",
+    "change":    "kata race {race_id}: {experiments} experiments, best_score={best_score:.3f}, wf_pattern={wf_pattern}",
+    "score_before": 0,
+    "score_after":  race.best_score,
+    "delta":        race.best_score,
+    "wf_pattern":   race.wf_pattern (or "UNKNOWN" if absent),
+    "ts":  now (UTC ISO 8601),
+    "type": "anti_pattern"
+  }
 Update kata-state.json outcome
 Move to kata-history/
 ```
@@ -86,9 +100,30 @@ Move to kata-history/
 ```
 Check current_favorable_sharpe
 If >= 0.3: deploy best result
-If < 0.3: close Kata, log learnings
+If < 0.3: close Kata, write race-level anti-pattern to knowledge/anti-patterns.jsonl:
+  {
+    "archetype": race.target.archetype,
+    "pair":      race.target.pair,
+    "timeframe": race.target.timeframe,
+    "obstacle":  "race_zero_score",
+    "change":    "kata race {race_id}: {experiments} experiments, best_score={best_score:.3f}, wf_pattern={wf_pattern}",
+    "score_before": 0,
+    "score_after":  race.best_score,
+    "delta":        race.best_score,
+    "wf_pattern":   race.wf_pattern (or "UNKNOWN" if absent),
+    "ts":  now (UTC ISO 8601),
+    "type": "anti_pattern"
+  }
 Move to kata-history/
 ```
+
+**Race-level anti-pattern schema** matches `kata/lib/knowledge.py` `append_anti_pattern()`.
+The `obstacle` field is `race_zero_score` (distinct from per-experiment obstacles like
+`entry_quality` or `risk_reward_ratio`). Strategyzer Phase 0 filters by archetype and
+takes the 20 most recent entries — race-level entries appear alongside per-experiment
+entries, giving the next strategyzer run a "don't retry this cell" signal.
+Create `knowledge/` if it does not exist. `ts` and `type` may be omitted — the
+knowledge.py writer stamps them automatically.
 
 This means: parent spawns worker and exits. Auto-mode detects
 completion and handles deployment. No polling, no blocking.
@@ -140,3 +175,18 @@ After completing kata check (even if no races found):
 
 3. Message user ONLY if a kata graduate was deployed or a race was closed.
    Silent when no completed races found.
+
+4. Write auto-memory summary to `~/.claude/memory/monitor-kata.md`:
+   ```
+   # Monitor-Kata Tick Summary
+   Updated: {ISO timestamp}
+
+   ## Active Races
+   {list each open race: cell (archetype/pair/timeframe), round, current_score, experiments_run — or "none"}
+
+   ## Completed This Tick
+   {graduations deployed, races closed with reason — or "none"}
+
+   ## Next Tick Notes
+   {races near experiment budget, stalled cells (score < 0.3 after 10+ experiments), anything to recheck}
+   ```
