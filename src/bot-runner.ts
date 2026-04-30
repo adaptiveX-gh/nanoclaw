@@ -904,7 +904,7 @@ async function getBotStatus(deploymentId: string): Promise<BotStatusFile> {
         | Array<{ date: string; cumulative_pnl_pct: number }>
         | undefined = prevPnl?.daily_equity;
       let enrichedTrades: EnrichedTrade[] | undefined =
-        prevPnl?.enriched_trades?.filter(t => t.closed_at !== null);
+        prevPnl?.enriched_trades?.filter((t) => t.closed_at !== null);
       let openTradesRaw: FtTradeLike[] = [];
       try {
         const tradesRes = await ftApiCall(
