@@ -76,7 +76,10 @@ interface KataRequest {
   type: 'start_race' | 'stop_race';
   race_id: string;
   candidate_name?: string;
+  target_type?: 'strategy' | 'portfolio' | 'gates';
   strategy_code?: string;
+  config_snapshot?: string; // JSON contents of config to optimize (portfolio/gates)
+  audit_context?: string; // JSON contents of audit report (portfolio/gates)
   pair?: string;
   timeframe?: string;
   archetype?: string;
@@ -506,16 +509,45 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
   const raceDir = resolveRaceDir(raceId, req.group_folder);
   const knowledgeDir = resolveKnowledgeDir(req.group_folder);
   const dataDir = resolveDataDir();
+  const targetType = req.target_type || 'strategy';
 
-  // Write strategy code to race dir
-  if (req.strategy_code) {
-    fs.writeFileSync(path.join(raceDir, 'agent.py'), req.strategy_code);
-  }
-
-  // Ensure agent.py exists
-  const agentPath = path.join(raceDir, 'agent.py');
-  if (!fs.existsSync(agentPath)) {
-    throw new Error(`No strategy file at ${agentPath}`);
+  // Set up race dir contents based on target type
+  if (targetType === 'strategy') {
+    // Write strategy code to race dir
+    if (req.strategy_code) {
+      fs.writeFileSync(path.join(raceDir, 'agent.py'), req.strategy_code);
+    }
+    // Ensure agent.py exists
+    const agentPath = path.join(raceDir, 'agent.py');
+    if (!fs.existsSync(agentPath)) {
+      throw new Error(`No strategy file at ${agentPath}`);
+    }
+  } else if (targetType === 'portfolio') {
+    if (req.config_snapshot) {
+      fs.writeFileSync(
+        path.join(raceDir, 'portfolio-rules.json'),
+        req.config_snapshot,
+      );
+    }
+    if (req.audit_context) {
+      fs.writeFileSync(
+        path.join(raceDir, 'portfolio-audit.json'),
+        req.audit_context,
+      );
+    }
+  } else if (targetType === 'gates') {
+    if (req.config_snapshot) {
+      fs.writeFileSync(
+        path.join(raceDir, 'scoring-config.json'),
+        req.config_snapshot,
+      );
+    }
+    if (req.audit_context) {
+      fs.writeFileSync(
+        path.join(raceDir, 'gate-audit.json'),
+        req.audit_context,
+      );
+    }
   }
 
   const pair = req.pair || 'BTC/USDT:USDT';
@@ -524,7 +556,9 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
   // Self-healing: fix environment issues before container launch
   ensureConfig();
   normalizeDataPaths(dataDir);
-  ensureData(dataDir, pair, timeframe);
+  if (targetType === 'strategy') {
+    ensureData(dataDir, pair, timeframe);
+  }
 
   // Clean up existing container
   removeContainer(containerName);
@@ -545,6 +579,13 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
     '-v',
     `${FT_CONFIG}:/freqtrade/user_data/config.json:ro`,
   ];
+
+  // Portfolio/gates modes need the workspace root (auto-mode/, reports/)
+  if (targetType !== 'strategy') {
+    const groupFolder = req.group_folder || fs.readdirSync(GROUPS_DIR)[0];
+    const workspaceRoot = path.join(GROUPS_DIR, groupFolder);
+    commonMounts.push('-v', `${workspaceRoot}:/workspace/group-data:ro`);
+  }
 
   // Common env vars
   const commonEnv = [
@@ -664,7 +705,56 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
       'cat /workspace/race/agent-input.json | node /app/dist/index.js',
     ];
   } else {
-    // Script mode (default): use iterate_container.py directly
+    // Script mode (default): choose iteration script by target type
+    const scriptPath =
+      targetType === 'portfolio'
+        ? '/app/kata/iterate_portfolio.py'
+        : targetType === 'gates'
+          ? '/app/kata/iterate_gates.py'
+          : '/app/kata/iterate_container.py';
+
+    const scriptArgs: string[] = [
+      '--race-dir',
+      '/workspace/race',
+      '--max-experiments',
+      String(maxExperiments),
+    ];
+
+    if (targetType === 'strategy') {
+      scriptArgs.push(
+        '--data-dir',
+        '/freqtrade/user_data/data',
+        '--knowledge-dir',
+        '/workspace/knowledge',
+        '--target-pair',
+        pair,
+        '--target-timeframe',
+        timeframe,
+      );
+    } else if (targetType === 'portfolio') {
+      scriptArgs.push(
+        '--data-dir',
+        '/workspace/group-data',
+        '--config',
+        '/workspace/race/portfolio-rules.json',
+        '--output',
+        '/workspace/race/portfolio-rules.graduated.json',
+        '--days',
+        '30',
+      );
+    } else if (targetType === 'gates') {
+      scriptArgs.push(
+        '--data-dir',
+        '/workspace/group-data',
+        '--config',
+        '/workspace/race/scoring-config.json',
+        '--output',
+        '/workspace/race/scoring-config.graduated.json',
+        '--days',
+        '30',
+      );
+    }
+
     dockerArgs = [
       'run',
       '-d',
@@ -676,24 +766,13 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
       ...commonEnv,
       ...hostGatewayArgs(),
       CONTAINER_IMAGE,
-      '/app/kata/iterate_container.py',
-      '--race-dir',
-      '/workspace/race',
-      '--data-dir',
-      '/freqtrade/user_data/data',
-      '--knowledge-dir',
-      '/workspace/knowledge',
-      '--max-experiments',
-      String(maxExperiments),
-      '--target-pair',
-      pair,
-      '--target-timeframe',
-      timeframe,
+      scriptPath,
+      ...scriptArgs,
     ];
   }
 
   logger.info(
-    { raceId, containerName, pair, timeframe, maxExperiments, kataMode },
+    { raceId, containerName, targetType, pair, timeframe, maxExperiments, kataMode },
     'Starting kata race container',
   );
 

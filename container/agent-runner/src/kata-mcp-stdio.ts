@@ -96,7 +96,7 @@ const server = new McpServer({ name: 'katarunner', version: '1.0.0' });
 
 server.tool(
   'kata_start',
-  'Start a kata improvement race for a strategy. Creates a container that runs iterate_container.py to evolve the strategy through walk-forward benchmarking. Returns immediately with race_id.',
+  'Start a kata improvement race. Creates a container to evolve a strategy (iterate_container.py), portfolio allocation (iterate_portfolio.py), or gate thresholds (iterate_gates.py). Returns immediately with race_id.',
   {
     race_id: z
       .string()
@@ -104,12 +104,36 @@ server.tool(
     candidate_name: z
       .string()
       .describe('Human-readable strategy name'),
+    target_type: z
+      .enum(['strategy', 'portfolio', 'gates'])
+      .optional()
+      .describe(
+        'Race target type. Default: "strategy". "portfolio" runs iterate_portfolio.py, "gates" runs iterate_gates.py',
+      ),
     strategy_code: z
       .string()
-      .describe('Full Python source of the KataStrategy class'),
+      .optional()
+      .describe(
+        'Full Python source of the KataStrategy class. Required for strategy races.',
+      ),
+    config_snapshot: z
+      .string()
+      .optional()
+      .describe(
+        'JSON contents of config to optimize (portfolio-rules.json or scoring-config.json). Used by portfolio/gates races.',
+      ),
+    audit_context: z
+      .string()
+      .optional()
+      .describe(
+        'JSON contents of audit report (portfolio-audit.json or gate-audit.json). Passed as initial context.',
+      ),
     pair: z
       .string()
-      .describe('Trading pair (e.g. "LINK/USDT:USDT")'),
+      .optional()
+      .describe(
+        'Trading pair (e.g. "LINK/USDT:USDT"). Required for strategy races.',
+      ),
     timeframe: z
       .string()
       .optional()
@@ -140,7 +164,10 @@ server.tool(
         type: 'start_race',
         race_id: args.race_id,
         candidate_name: args.candidate_name,
+        target_type: args.target_type || 'strategy',
         strategy_code: args.strategy_code,
+        config_snapshot: args.config_snapshot,
+        audit_context: args.audit_context,
         pair: args.pair,
         timeframe: args.timeframe || '4h',
         archetype: args.archetype || 'UNKNOWN',
