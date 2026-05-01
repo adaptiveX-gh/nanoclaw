@@ -772,7 +772,15 @@ async function startRaceContainer(req: KataRequest): Promise<RaceInstance> {
   }
 
   logger.info(
-    { raceId, containerName, targetType, pair, timeframe, maxExperiments, kataMode },
+    {
+      raceId,
+      containerName,
+      targetType,
+      pair,
+      timeframe,
+      maxExperiments,
+      kataMode,
+    },
     'Starting kata race container',
   );
 
