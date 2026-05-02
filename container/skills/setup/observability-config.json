@@ -1,0 +1,27 @@
+{
+  "_comment": "Observability layer configuration. Override defaults from kata/observability/config.py.",
+  "thresholds": {
+    "rcce": { "excellent": 0.7, "acceptable": 0.5, "concerning": 0.5, "critical": 0.3 },
+    "bdl": { "excellent": 60, "acceptable": 360, "concerning": 1440, "critical": 4320 },
+    "mttd_type_a_regime_transitions": { "excellent": 240, "acceptable": 720, "concerning": 2880, "critical": 10080 },
+    "mttd_type_b_strategy_decay": { "excellent": 1440, "acceptable": 4320, "concerning": 10080, "critical": 21600 },
+    "mttd_type_c_market_structure": { "excellent": 720, "acceptable": 2880, "concerning": 10080, "critical": 21600 },
+    "lveq": { "excellent": 0.7, "acceptable": 0.5, "concerning": 0.5, "critical": 0.3 }
+  },
+  "windows": {
+    "lveq_evaluation_days": 90,
+    "lveq_survival_days": 30,
+    "lveq_proxy_survival_days": 7,
+    "rcce_trend_days": 30,
+    "bdl_aggregation_days": 30,
+    "mttd_aggregation_days": 90,
+    "knowledge_reuse_window_days": 30,
+    "missed_bleeder_threshold_days": 5
+  },
+  "feature_flags": {
+    "enable_lveq_proxy": true,
+    "enable_competition_dashboard_alerts": true,
+    "enable_action_recommendations": true,
+    "competition_mode": false
+  }
+}

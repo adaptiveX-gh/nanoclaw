@@ -144,9 +144,9 @@ if gate_audit exists AND gate_audit.gate_health_score < 0.60:
 
 # Level 3: Portfolio kata trigger
 portfolio_audit = read("reports/portfolio-audit.json")
-if portfolio_audit exists AND portfolio_audit.portfolio_health_score < 0.60:
+if portfolio_audit exists AND portfolio_audit.portfolio_kata_recommended == true:
   if no active kata race with target_type == "portfolio":
-    Log: "PORTFOLIO HEALTH LOW: score={score}. Triggering portfolio kata."
+    Log: "PORTFOLIO HEALTH LOW: score={portfolio_audit.portfolio_health_score}. Triggering portfolio kata."
     Route to kata-bridge with target_type="portfolio"
     # kata-bridge reads portfolio-audit.json for concentration/imbalance data
 ```
