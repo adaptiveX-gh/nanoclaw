@@ -61,17 +61,11 @@ Files written:
 - `auto-mode/roster.json` — status updates
 - `auto-mode/tick-log.jsonl` — step trace (append)
 
-## Console Sync — Mandatory
+## Console Sync — Automatic
 
-After writing any state file that the console dashboard displays,
-call `sync_state_to_supabase` to push the update. The console reads
-from Supabase, not from local files. Files to sync:
-
-| File | state_key |
-|------|-----------|
-| `campaigns.json` | `campaigns` |
-| `roster.json` | `roster` |
-| `deployments.json` | `deployments` |
+State files are pushed to the dashboard automatically by the host-side
+`console-sync` loop every 60 seconds. No manual sync calls needed —
+just write the file and console-sync picks it up on the next cycle.
 
 ## Pre-Staged Deployment Roster
 
@@ -530,13 +524,7 @@ groups never hard-block — they get promoted to the top of the ranking.
 
 After completing allocation (even if 0 deployments):
 
-1. Sync modified files to Supabase:
-   ```
-   sync_state_to_supabase(state_key="campaigns", ...)
-   sync_state_to_supabase(state_key="roster", ...)
-   ```
-
-2. Append completion entry to tick-log:
+1. Append completion entry to tick-log:
    ```
    append to auto-mode/tick-log.jsonl:
      {"ts": now, "tick_id": null, "skill": "monitor-deploy", "step": 6,

@@ -56,24 +56,11 @@ See `setup/scoring-config-defaults.json` for all keys and defaults.
 
 ---
 
-## Console Sync — Mandatory
+## Console Sync — Automatic
 
-After writing any state file that the console dashboard displays,
-call `sync_state_to_supabase` to push the update. The console reads
-from Supabase, not from local files. Files to sync:
-
-| File | state_key |
-|------|-----------|
-| `campaigns.json` | `campaigns` |
-| `deployments.json` | `deployments` |
-| `roster.json` | `roster` |
-| `missed-opportunities.json` | `missed_opps` |
-| `triage-matrix.json` | `triage_matrix` |
-| `cell-grid-latest.json` | `cell_grid` |
-| `portfolio-correlation.json` | `portfolio_correlation` |
-| `tv-signals.json` | `tv_signals` |
-| `regime-intel.json` | `regime_intel` |
-| `season.json` | `season` |
+State files are pushed to the dashboard automatically by the host-side
+`console-sync` loop every 60 seconds. No manual sync calls needed —
+just write the file and console-sync picks it up on the next cycle.
 
 ---
 
@@ -358,7 +345,6 @@ For each running bot (from `bot_list()`):
       dep.state = "retired"
       dep.retired_reason = "orphan_auto_retired"
       write auto-mode/deployments.json
-      sync_state_to_supabase(state_key="deployments", ...)
     Post: "Orphan auto-retired: {strategy}. No campaign after 48h."
     `aphexdata_record_event(verb_id="orphan_auto_retired", verb_category="execution", object_type="deployment", ...)`
 
@@ -407,7 +393,6 @@ for campaign in campaigns where state not in {"pending_deploy"}:
 
 if deployments_changed:
   write auto-mode/deployments.json
-  sync_state_to_supabase(state_key="deployments", ...)
   Log: "Reconciliation healed deployments.json"
 
 # 2. Reconcile roster → deployments (retired cell coverage)
@@ -428,7 +413,6 @@ if roster:
 
   if roster_changed:
     write auto-mode/roster.json
-    sync_state_to_supabase(state_key="roster", ...)
     Log: "Reconciliation healed roster.json"
 ```
 
@@ -480,7 +464,7 @@ market-timing will use posteriors for probabilistic regime_fit instead of
 the lookup table.
 
 **Regime intel snapshot (every regime refresh):**
-After computing posteriors, build `regime-intel.json` from shadow log + current regime state. Read `knowledge/regime-shadow-log.jsonl`, compute per-pair 7-day rolling agreement rates, and 5 promotion criteria: `agreement_above_threshold` (>0.70), `hmm_converging_all_pairs`, `no_sustained_disagreement`, `min_shadow_entries` (>=100), `bocpd_validation`. Write regime-intel.json with per-pair details and `sync_state_to_supabase(state_key="regime_intel")`.
+After computing posteriors, build `regime-intel.json` from shadow log + current regime state. Read `knowledge/regime-shadow-log.jsonl`, compute per-pair 7-day rolling agreement rates, and 5 promotion criteria: `agreement_above_threshold` (>0.70), `hmm_converging_all_pairs`, `no_sustained_disagreement`, `min_shadow_entries` (>=100), `bocpd_validation`. Write regime-intel.json with per-pair details.
 
 **Regime shift fast-path (every regime refresh):**
 After updating market-prior.json, compare fresh regime data against the last
@@ -698,7 +682,6 @@ single field lookup, the same pattern Findings 1 and 16 use.
 For proven/published bots:
 Same metric update. Track ongoing performance after graduation.
 
-`sync_state_to_supabase(state_key="campaigns", ...)`
 
 **Inactive bot detection (warm-up bots only):**
 
@@ -740,8 +723,7 @@ Stamp `eviction_priority` + `eviction_factors[]` on every campaign with `slot_st
 - **Trial**: base=`trial_base`, bonuses for dead_bot (0 trades+24h), low_win_rate (<0.25@5), high_divergence (>0.50), expired (per day). Protections: promising (WR>0.45), near_graduation (4+ gates met).
 - **Graduated**: base=`graduated_base`, penalties for degrading_win_rate (<0.30), degrading_divergence (>0.50), anti_regime, regime_fault_paused. Protections: diversity (only bot in group), strong_performer (Sharpe>0.8), tenure (>30d).
 
-Drives Trigger H/I (Step 4) and Step 6 (slot allocation). `sync_state_to_supabase(state_key="campaigns", ...)`
-
+Drives Trigger H/I (Step 4) and Step 6 (slot allocation). 
 **TV Signal Source Tracking (if tv-signals.json exists and is non-empty):**
 
 Match closed trades on `tv-manual` bot to TV signal sources via `order_tag` prefix `tv_{source_id}_`. Update per-source stats (trade_count, win_rate, pnl_pct). Flag sources with 10+ trades and WR < 25%. Check for timed-out trades (> `auto_close_timeout_hours`). Update `tv-signal-log.jsonl` outcomes for newly closed trades. Emit `tv_trade_closed` events. Sync to Supabase.
@@ -815,7 +797,6 @@ dep = find in deployments.deployments where id == campaign.id
 dep.state = "retired"
 dep.retired_reason = reason
 write auto-mode/deployments.json
-sync_state_to_supabase(state_key="deployments", ...)
 
 aphexdata_record_event(verb_id="kata_retired_early", ...)
 Post to feed: "Early retirement: {strategy} on {pair}/{tf} — {reason}"
@@ -1026,7 +1007,6 @@ if dep:
   Log: "GRADUATED STAKE BOOST: {strategy} {old_stake:.1f}% → {new_stake:.1f}% (×{grad_mult})"
 
   write auto-mode/deployments.json
-  sync_state_to_supabase(state_key="deployments", ...)
 
 Write header tags to strategy .py:
   # ARCHETYPE: {archetype}
@@ -1076,8 +1056,7 @@ for campaign in campaigns where state == "graduated_internal_only":
       if dep:
         dep.state = "graduated_external"
         write auto-mode/deployments.json
-        sync_state_to_supabase(state_key="deployments", ...)
-      If live_sharpe >= 0.8:
+        If live_sharpe >= 0.8:
         Enable marketplace signal publishing
         Post: "PUBLISHED: {strategy} — Sharpe {s} exceeds publishing threshold"
       aphexdata_record_event(verb_id="kata_graduated_external", ...)
@@ -1103,7 +1082,6 @@ dep = find in deployments.deployments where id == campaign.id
 dep.state = "retired"
 dep.retired_reason = reason
 write auto-mode/deployments.json
-sync_state_to_supabase(state_key="deployments", ...)
 
 # Return capital to season pool (if season active)
 season = read auto-mode/season.json (gracefully skip if missing)
@@ -1137,7 +1115,6 @@ if roster:
         changed = true
   if changed:
     write auto-mode/roster.json
-    sync_state_to_supabase(state_key="roster", ...)
 
 Update TRADE.md on retirement:
   TRADE_MD="/workspace/group/strategies/${strategy_name}.trade.md"

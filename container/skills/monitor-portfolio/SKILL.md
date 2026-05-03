@@ -95,8 +95,7 @@ When 3+ bots have run concurrently for 7+ days:
      "last_updated": "..."
    }
    ```
-   `sync_state_to_supabase(state_key="portfolio_correlation", ...)`
-
+   
 4. **ALERT** if avg correlation > 0.30:
    "High correlation: {corr} across {n} strategies.
     Consider filling a different correlation group."
@@ -145,7 +144,6 @@ Store in /workspace/group/auto-mode/regime-transitions.json:
   }
   ```
 
-sync_state_to_supabase(state_key="regime_transitions", ...)
 
 ### Step 8c: PORTFOLIO TAIL RISK (daily, same cadence as Step 8)
 
@@ -303,7 +301,6 @@ If portfolio_health_score < 0.60:
         Portfolio kata recommended."
 ```
 
-sync_state_to_supabase(state_key="portfolio_audit", ...)
 
 ## Daily Rollup — Competition Benchmark + Experiment Ledger
 
@@ -510,8 +507,7 @@ if now > season.ends_at:
   season.status = "completed"
   season.completed_at = now ISO
   write auto-mode/season.json
-  sync_state_to_supabase(state_key="season", file="auto-mode/season.json")
-  aphexdata_record_event({
+    aphexdata_record_event({
     verb_id: "season_auto_completed",
     verb_category: "execution",
     object_type: "season",
@@ -792,7 +788,6 @@ season.dashboard.last_computed = now ISO
 season.dashboard.day_number = day_number
 
 write auto-mode/season.json
-sync_state_to_supabase(state_key="season", file="auto-mode/season.json")
 
 Log: "Season dashboard: Day {day_number}/{season.duration_days}, alpha={alpha_pct}, slots={slots_filled}/{slots_total}, {len(concerns)} concerns"
 ```
@@ -801,14 +796,7 @@ Log: "Season dashboard: Day {day_number}/{season.duration_days}, alpha={alpha_pc
 
 After completing portfolio analysis:
 
-1. Sync all modified files to Supabase:
-   ```
-   sync_state_to_supabase(state_key="portfolio_correlation", ...)
-   sync_state_to_supabase(state_key="regime_transitions", ...)  # if Sunday
-   sync_state_to_supabase(state_key="portfolio_audit", ...)
-   ```
-
-2. Append completion entry to tick-log:
+1. Append completion entry to tick-log:
    ```
    append to auto-mode/tick-log.jsonl:
      {"ts": now, "tick_id": null, "skill": "monitor-portfolio", "step": 8,

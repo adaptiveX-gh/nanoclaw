@@ -24,7 +24,6 @@ read-only operations, and writes one report file.
 | `freqtrade_get_freqtrade_version` | FreqTrade MCP connectivity |
 | `aphexdata_health` | aphexDATA MCP connectivity |
 | `orderflow_fetch_regime` | Orderflow MCP connectivity |
-| `sync_state_to_supabase` | Push report to dashboard |
 
 ## Output
 
@@ -167,16 +166,6 @@ fi
 | HTTP 200 with JSON response | **pass** |
 | HTTP 401 | **fail** — fix: "TV webhook returned 401. Edge function needs verify_jwt=false. Redeploy with: supabase functions deploy tv-webhook --no-verify-jwt" |
 | HTTP 500 or timeout | **warn** — fix: "TV webhook edge function returned error. Check Supabase function logs." |
-
-### Check 8: sync_state_to_supabase Availability
-
-Try calling `sync_state_to_supabase` with a known state key to test connectivity.
-Use state_key `health_check` with a minimal test payload `{"test": true}`.
-
-| Result | Verdict |
-|--------|---------|
-| Tool responds successfully | **pass** |
-| Tool not found or timeout | **warn** — fix: "sync_state_to_supabase tool unavailable. Dashboard will not receive state updates." |
 
 ---
 
@@ -501,10 +490,7 @@ If there are any fixes:
 
 List fail fixes first, then warn fixes.
 
-### 6e. Sync to dashboard
+### 6e. Dashboard visibility
 
-Call `sync_state_to_supabase` with:
-- `state_key`: `health_check`
-- `data`: the full JSON report object
-
-This makes the health status visible on the console dashboard.
+Console-sync automatically pushes health report data to the dashboard every 60s.
+Write the report to `{WORKSPACE}/reports/health-check-latest.json` and it syncs automatically.

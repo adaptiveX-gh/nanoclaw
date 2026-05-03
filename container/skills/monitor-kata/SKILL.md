@@ -159,13 +159,7 @@ slots — they run independently.
 
 After completing kata check (even if no races found):
 
-1. If any campaigns or deployments were modified:
-   ```
-   sync_state_to_supabase(state_key="campaigns", ...)
-   sync_state_to_supabase(state_key="kata_state", ...)
-   ```
-
-2. Append completion entry to tick-log:
+1. Append completion entry to tick-log:
    ```
    append to auto-mode/tick-log.jsonl:
      {"ts": now, "tick_id": null, "skill": "monitor-kata", "step": 7,

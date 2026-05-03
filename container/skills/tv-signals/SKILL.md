@@ -51,7 +51,7 @@ TradingView Alert
          ▼
 ┌─────────────────┐
 │   Track & Log    │  tv-signals.json stats, tv-signal-log.jsonl
-│   Sync to dash   │  sync_state_to_supabase("tv_signals")
+│   Sync to dash   │  (auto via console-sync)
 │   Audit trail    │  aphexdata_record_event
 └─────────────────┘
 ```
@@ -626,9 +626,7 @@ aphexdata_record_event(
 ```
 
 **5e. Sync to dashboard:**
-```
-sync_state_to_supabase(state_key="tv_signals", file="tv-signals.json")
-```
+Console-sync pushes tv-signals.json automatically every 60s.
 
 ---
 
