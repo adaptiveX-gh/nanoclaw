@@ -341,6 +341,63 @@ function loadRegimeIntel(): any | null {
   return null;
 }
 
+function loadObservability(): any | null {
+  try {
+    if (!fs.existsSync(GROUPS_DIR)) return null;
+    for (const folder of fs.readdirSync(GROUPS_DIR)) {
+      const kpiFile = path.join(
+        GROUPS_DIR,
+        folder,
+        'knowledge',
+        'observability',
+        'kpi-snapshots.jsonl',
+      );
+      if (!fs.existsSync(kpiFile)) continue;
+      try {
+        const lines = fs.readFileSync(kpiFile, 'utf-8')
+          .split('\n')
+          .filter((l: string) => l.trim());
+        if (lines.length === 0) continue;
+        const latest = JSON.parse(lines[lines.length - 1]);
+
+        // Read recent bleeding events (last 7 days)
+        const bleedFile = path.join(
+          GROUPS_DIR,
+          folder,
+          'knowledge',
+          'observability',
+          'bleeding-events.jsonl',
+        );
+        let bleedingEvents: any[] = [];
+        if (fs.existsSync(bleedFile)) {
+          const cutoff = Date.now() - 7 * 86400_000;
+          bleedingEvents = fs.readFileSync(bleedFile, 'utf-8')
+            .split('\n')
+            .filter((l: string) => l.trim())
+            .map((l: string) => { try { return JSON.parse(l); } catch { return null; } })
+            .filter((e: any) => e && new Date(e.ts).getTime() > cutoff);
+        }
+
+        return {
+          ts: latest.ts,
+          kpis: latest.kpis ?? latest,
+          diagnostics: latest.diagnostics ?? {},
+          bleeding: {
+            events: bleedingEvents,
+            active_deployments_checked: latest.bleeding?.active_deployments_checked ?? 0,
+          },
+          recommendations: latest.recommendations ?? [],
+        };
+      } catch {
+        // skip malformed files
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function loadTriageMatrix(): any[] {
   const allResults: any[] = [];
   try {
@@ -728,6 +785,7 @@ export async function runConsoleSync(
   );
   const research = loadResearchData();
   const regimeIntel = loadRegimeIntel();
+  const observability = loadObservability();
   const season = loadSeason();
   const tvSignalSources = loadTvSignalSources();
   const tvSignalLog = loadTvSignalLog();
@@ -758,6 +816,9 @@ export async function runConsoleSync(
   if (season) {
     payload.season = season;
   }
+  if (observability) {
+    payload.observability = observability;
+  }
 
   const success = await pushToConsole(config, payload);
 
@@ -786,6 +847,7 @@ export async function runConsoleSync(
           .length,
         triageMatrix: triageMatrix.length,
         season: season ? season.season_id : 'none',
+        observability: observability ? 'yes' : 'none',
       },
       '[console-sync] Push complete',
     );
