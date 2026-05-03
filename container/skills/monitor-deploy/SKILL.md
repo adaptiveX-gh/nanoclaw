@@ -362,14 +362,35 @@ for cand in ranked:
   # Deploy as trial — slot lifecycle starts NOW
   bot = bot_start_paper(cand.strategy, cand.pair, cand.timeframe, config)
 
-  # Volume-weighted effective stake (Finding 13 — unchanged)
+  # Volume-weighted effective stake (Finding 13) + conviction scaling + graduation boost
   vw = cell.volume_weight
   portfolio_avg_vw = mean(volume_weight of all active/staged cells, 0.65)
   base = roster_entry.base_stake_pct (default 5)
   raw = base * (vw / portfolio_avg_vw)
   floor   = base * config.VOLUME_WEIGHTED_STAKE.floor_multiplier   # 0.4
   ceiling = base * config.VOLUME_WEIGHTED_STAKE.ceiling_multiplier # 1.5
-  effective_stake_pct = clamp(raw, floor, ceiling)
+  volume_stake = clamp(raw, floor, ceiling)
+
+  # Conviction scaling: boost stake when regime conviction is high for preferred regime
+  cs = portfolio_rules.CONVICTION_SCALING (or defaults)
+  if cs.enabled:
+    conviction = cell.conviction (0–100, from market-timing grid)
+    archetype_regime_rel = classify(cell.regime, archetype.preferred_regimes, archetype.anti_regimes)
+    if archetype_regime_rel == "preferred" AND conviction >= cs.conviction_floor:
+      t = (conviction - cs.conviction_floor) / (100 - cs.conviction_floor)
+      conviction_factor = 1.0 + t * (cs.max_boost - 1.0)   # lerp 1.0 → max_boost (1.5)
+    elif archetype_regime_rel == "anti":
+      conviction_factor = cs.anti_regime_penalty              # 0.6
+    else:
+      conviction_factor = cs.neutral_regime_factor             # 1.0
+  else:
+    conviction_factor = 1.0
+
+  # Graduation multiplier (graduated bots earn more capital than trials)
+  slot_multiplier = portfolio_rules.CAPITAL_ALLOCATION.trial_stake_multiplier   # 1.0
+
+  effective_stake_pct = clamp(volume_stake * conviction_factor * slot_multiplier,
+                              floor, base * config.VOLUME_WEIGHTED_STAKE.ceiling_multiplier * cs.max_boost)
 
   # Create campaign with slot lifecycle stamps
   campaign = {

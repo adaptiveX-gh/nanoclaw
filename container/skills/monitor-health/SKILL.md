@@ -482,6 +482,41 @@ the lookup table.
 **Regime intel snapshot (every regime refresh):**
 After computing posteriors, build `regime-intel.json` from shadow log + current regime state. Read `knowledge/regime-shadow-log.jsonl`, compute per-pair 7-day rolling agreement rates, and 5 promotion criteria: `agreement_above_threshold` (>0.70), `hmm_converging_all_pairs`, `no_sustained_disagreement`, `min_shadow_entries` (>=100), `bocpd_validation`. Write regime-intel.json with per-pair details and `sync_state_to_supabase(state_key="regime_intel")`.
 
+**Regime shift fast-path (every regime refresh):**
+After updating market-prior.json, compare fresh regime data against the last
+cell-grid-latest.json composites. For each active deployment, check if the
+regime classification changed since the last market-timing cycle:
+```
+for each active deployment:
+  prev_regime = cell_grid[archetype][pair][tf].regime (from last market-timing)
+  curr_regime = market_prior[pair][horizon].regime (just refreshed)
+  prev_conviction = cell_grid[archetype][pair][tf].conviction
+  curr_conviction = market_prior[pair][horizon].conviction
+
+  # Detect significant regime shift
+  regime_changed = (prev_regime != curr_regime)
+  conviction_shift = abs(curr_conviction - prev_conviction) >= 20
+
+  if regime_changed OR conviction_shift:
+    # Re-score this cell's regime_fit using the fresh regime data
+    new_regime_fit = score_regime_fit(archetype, curr_regime, curr_conviction)
+    old_composite = cell_grid[archetype][pair][tf].composite
+    new_composite = new_regime_fit * 0.4 + cell.execution_fit * 0.25 + cell.net_edge * 0.35
+    cell_grid[archetype][pair][tf].regime = curr_regime
+    cell_grid[archetype][pair][tf].conviction = curr_conviction
+    cell_grid[archetype][pair][tf].composite = new_composite
+    Log: "REGIME FAST-PATH: {pair}/{tf} {prev_regime}→{curr_regime}
+          conviction {prev_conviction}→{curr_conviction}
+          composite {old_composite:.2f}→{new_composite:.2f}"
+
+if any cells were updated:
+  write cell-grid-latest.json
+  # Signal hysteresis below will pick up the new composites immediately
+```
+This closes the 4-hour latency gap: regime shifts are detected every 15 minutes
+(or 10 in competition mode) and cell composites are updated in-place. Signal
+hysteresis then toggles signals within 2 ticks (30 minutes → 20 in competition).
+
 **For each warm-up or proven bot:**
 ```
 cell_composite = composite score for this strategy's archetype + pair
@@ -978,6 +1013,18 @@ if dep:
   dep.slot_state = campaign.slot_state          # "graduated" (set by Trigger H or early grad)
   dep.state = "graduated_internal_only"
   dep.graduated = now
+
+  # Graduated stake boost — proven strategies earn more capital.
+  # Recalculate effective_stake_pct with graduated_stake_multiplier (default 1.3×).
+  grad_mult = portfolio_rules.CAPITAL_ALLOCATION.graduated_stake_multiplier (default 1.3)
+  old_stake = campaign.paper_trading.effective_stake_pct
+  new_stake = clamp(old_stake * grad_mult,
+                    campaign.paper_trading.base_stake_pct * 0.4,
+                    portfolio_rules.CAPITAL_ALLOCATION.max_per_deployment_pct)
+  campaign.paper_trading.effective_stake_pct = new_stake
+  dep.effective_stake_pct = new_stake
+  Log: "GRADUATED STAKE BOOST: {strategy} {old_stake:.1f}% → {new_stake:.1f}% (×{grad_mult})"
+
   write auto-mode/deployments.json
   sync_state_to_supabase(state_key="deployments", ...)
 

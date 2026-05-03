@@ -453,10 +453,46 @@ if competition_state exists AND competition_state.active == true:
   """
 ```
 
-If alpha is negative for 3+ consecutive days, flag as urgent and
-auto-route to kata-bridge with target_type="portfolio" — do NOT
-recommend, execute the rebalance autonomously. In competition mode
-the agent acts, it does not ask.
+### Auto-Kata-Bridge: Portfolio Improvement Escalation
+
+If alpha is negative for 3+ consecutive days, execute this escalation
+autonomously. In competition mode the agent acts, it does not ask.
+
+**Procedure:**
+
+1. Read `portfolio-rules.json` from workspace root (CWD).
+   If not found, read `/home/node/.claude/skills/setup/portfolio-rules-defaults.json`.
+   This is the `config_snapshot` for the kata race.
+
+2. Read `reports/portfolio-audit.json` if it exists.
+   This is the `audit_context` (concentration issues, group imbalance, etc.).
+
+3. Generate a race ID: `portfolio_{YYYYMMDD}_{HHMMSS}` (UTC).
+
+4. Call the `kata_start` MCP tool:
+
+```
+kata_start(
+  race_id="portfolio_{YYYYMMDD}_{HHMMSS}",
+  candidate_name="portfolio_improvement",
+  target_type="portfolio",
+  config_snapshot=<portfolio-rules.json contents as string>,
+  audit_context=<portfolio-audit.json contents as string, or "{}" if missing>,
+  max_experiments=10,
+  group_folder="{current group folder}"
+)
+```
+
+5. Log the escalation in the daily rollup:
+
+```
+AUTO-KATA-BRIDGE TRIGGERED: {N} consecutive negative alpha days.
+Race: {race_id}. Config source: {workspace|defaults}.
+```
+
+6. Do NOT block if portfolio-rules.json is missing — use defaults and proceed.
+   Do NOT block if portfolio-audit.json is missing — pass empty context.
+   The point is to START the improvement race, not to have perfect inputs.
 
 **Competition autonomy rule:** The Five Questions and kata decisions
 in the daily rollup are ANSWERED by the agent, not posed to the user.

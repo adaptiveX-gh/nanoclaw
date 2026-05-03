@@ -354,7 +354,8 @@ function loadObservability(): any | null {
       );
       if (!fs.existsSync(kpiFile)) continue;
       try {
-        const lines = fs.readFileSync(kpiFile, 'utf-8')
+        const lines = fs
+          .readFileSync(kpiFile, 'utf-8')
           .split('\n')
           .filter((l: string) => l.trim());
         if (lines.length === 0) continue;
@@ -371,10 +372,17 @@ function loadObservability(): any | null {
         let bleedingEvents: any[] = [];
         if (fs.existsSync(bleedFile)) {
           const cutoff = Date.now() - 7 * 86400_000;
-          bleedingEvents = fs.readFileSync(bleedFile, 'utf-8')
+          bleedingEvents = fs
+            .readFileSync(bleedFile, 'utf-8')
             .split('\n')
             .filter((l: string) => l.trim())
-            .map((l: string) => { try { return JSON.parse(l); } catch { return null; } })
+            .map((l: string) => {
+              try {
+                return JSON.parse(l);
+              } catch {
+                return null;
+              }
+            })
             .filter((e: any) => e && new Date(e.ts).getTime() > cutoff);
         }
 
@@ -384,7 +392,8 @@ function loadObservability(): any | null {
           diagnostics: latest.diagnostics ?? {},
           bleeding: {
             events: bleedingEvents,
-            active_deployments_checked: latest.bleeding?.active_deployments_checked ?? 0,
+            active_deployments_checked:
+              latest.bleeding?.active_deployments_checked ?? 0,
           },
           recommendations: latest.recommendations ?? [],
         };
