@@ -228,7 +228,9 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         model: resolveModel(task.prompt),
-        capabilities: (task.capabilities as import('./types.js').CapabilityProfile) ?? group.containerConfig?.capabilities,
+        capabilities:
+          (task.capabilities as import('./types.js').CapabilityProfile) ??
+          group.containerConfig?.capabilities,
         skillsAllowlist,
         maxOutputTokens: resolveMaxOutputTokens(task),
       },
