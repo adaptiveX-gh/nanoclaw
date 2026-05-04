@@ -112,6 +112,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add per-task capability profile override (NULL = inherit from group)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN capabilities TEXT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add is_bot_message column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -396,13 +405,35 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
 }
 
+/**
+ * Get the most recent bot messages for a chat (assistant responses).
+ * Used to inject prior assistant context into prompts so follow-up
+ * messages have visibility into what the agent previously said.
+ */
+export function getRecentBotMessages(
+  chatJid: string,
+  limit: number = 3,
+): NewMessage[] {
+  const sql = `
+    SELECT * FROM (
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      FROM messages
+      WHERE chat_jid = ? AND is_bot_message = 1
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+  return db.prepare(sql).all(chatJid, limit) as NewMessage[];
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, skills_allowlist, max_output_tokens)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, skills_allowlist, max_output_tokens, capabilities)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -417,6 +448,7 @@ export function createTask(
     task.created_at,
     task.skills_allowlist ?? null,
     task.max_output_tokens ?? null,
+    task.capabilities ?? null,
   );
 }
 
@@ -452,6 +484,7 @@ export function updateTask(
       | 'status'
       | 'skills_allowlist'
       | 'max_output_tokens'
+      | 'capabilities'
     >
   >,
 ): void {
@@ -485,6 +518,10 @@ export function updateTask(
   if (updates.max_output_tokens !== undefined) {
     fields.push('max_output_tokens = ?');
     values.push(updates.max_output_tokens);
+  }
+  if (updates.capabilities !== undefined) {
+    fields.push('capabilities = ?');
+    values.push(updates.capabilities);
   }
 
   if (fields.length === 0) return;

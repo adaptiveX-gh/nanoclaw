@@ -34,6 +34,7 @@ import {
   getDb,
   getMessagesSince,
   getNewMessages,
+  getRecentBotMessages,
   getRegisteredGroup,
   getRouterState,
   initDatabase,
@@ -46,7 +47,12 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  escapeXml,
+  findChannel,
+  formatMessages,
+  formatOutbound,
+} from './router.js';
 import {
   startBotRunner,
   startBotContainer,
@@ -192,7 +198,23 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  // Inject recent assistant responses so follow-up messages have context
+  // about what Wolf previously said (bot messages are filtered from getMessagesSince).
+  const recentBotMsgs = getRecentBotMessages(chatJid, 3);
+  let priorContext = '';
+  if (recentBotMsgs.length > 0) {
+    const lines = recentBotMsgs.map((m) => {
+      const displayTime = m.timestamp;
+      // Truncate very large bot responses to avoid blowing up prompt budget
+      const content =
+        m.content.length > 4000
+          ? m.content.slice(0, 4000) + '\n[...truncated]'
+          : m.content;
+      return `<message sender="${escapeXml(ASSISTANT_NAME)}" time="${escapeXml(displayTime)}">${escapeXml(content)}</message>`;
+    });
+    priorContext = `<prior_assistant_messages>\n${lines.join('\n')}\n</prior_assistant_messages>\n`;
+  }
+  const prompt = priorContext + formatMessages(missedMessages, TIMEZONE);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.

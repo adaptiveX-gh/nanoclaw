@@ -92,6 +92,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
     skills_allowlist: z.array(z.string()).optional().describe('Optional list of skill names to mount in the container. When set, only these skills are available. When omitted, all skills are mounted.'),
+    capabilities: z.enum(['core', 'research', 'trading', 'full']).optional().describe('MCP capability profile override. core=minimal, research=+freqtrade, trading=+botrunner+aphexdata, full=all servers. Default: inherits from group.'),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -146,6 +147,9 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     };
     if (args.skills_allowlist) {
       data.skills_allowlist = JSON.stringify(args.skills_allowlist);
+    }
+    if (args.capabilities) {
+      data.capabilities = args.capabilities;
     }
 
     writeIpcFile(TASKS_DIR, data);
@@ -260,6 +264,7 @@ server.tool(
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
     skills_allowlist: z.array(z.string()).optional().describe('Optional list of skill names to mount in the container. When set, only these skills are available. Pass empty array to clear (restore all skills).'),
+    capabilities: z.enum(['core', 'research', 'trading', 'full']).optional().describe('MCP capability profile override. core=minimal, research=+freqtrade, trading=+botrunner+aphexdata, full=all servers.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -300,6 +305,7 @@ server.tool(
         ? JSON.stringify(args.skills_allowlist)
         : undefined; // empty array = clear allowlist (NULL in DB = all skills)
     }
+    if (args.capabilities !== undefined) data.capabilities = args.capabilities;
 
     writeIpcFile(TASKS_DIR, data);
 

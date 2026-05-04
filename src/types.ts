@@ -83,6 +83,7 @@ export interface ScheduledTask {
   created_at: string;
   skills_allowlist?: string | null;
   max_output_tokens?: number | null;
+  capabilities?: string | null;
 }
 
 export interface TaskRunLog {
