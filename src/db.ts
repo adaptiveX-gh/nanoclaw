@@ -121,6 +121,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add per-task env overrides (JSON object, NULL = no overrides)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN env_overrides TEXT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add is_bot_message column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -432,8 +441,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, skills_allowlist, max_output_tokens, capabilities)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at, skills_allowlist, max_output_tokens, capabilities, env_overrides)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -449,6 +458,7 @@ export function createTask(
     task.skills_allowlist ?? null,
     task.max_output_tokens ?? null,
     task.capabilities ?? null,
+    task.env_overrides ?? null,
   );
 }
 
@@ -485,6 +495,7 @@ export function updateTask(
       | 'skills_allowlist'
       | 'max_output_tokens'
       | 'capabilities'
+      | 'env_overrides'
     >
   >,
 ): void {
@@ -522,6 +533,10 @@ export function updateTask(
   if (updates.capabilities !== undefined) {
     fields.push('capabilities = ?');
     values.push(updates.capabilities);
+  }
+  if (updates.env_overrides !== undefined) {
+    fields.push('env_overrides = ?');
+    values.push(updates.env_overrides);
   }
 
   if (fields.length === 0) return;

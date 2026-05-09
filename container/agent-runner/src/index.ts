@@ -669,6 +669,15 @@ async function runQuery(
       const textResult = 'result' in message ? (message as { result?: string }).result : null;
       log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
 
+      // Log cache metrics so we can verify prompt caching is working
+      type MU = { inputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number };
+      const modelUsage = (message as { modelUsage?: Record<string, MU> }).modelUsage;
+      if (modelUsage) {
+        for (const [model, u] of Object.entries(modelUsage)) {
+          log(`[cache] model=${model} input=${u.inputTokens} creation=${u.cacheCreationInputTokens} read=${u.cacheReadInputTokens}`);
+        }
+      }
+
       // Detect API errors from stale session content (e.g. image blocks the API can't reprocess).
       // Don't forward these to the user — the caller will retry with a fresh session.
       const isCorruption = textResult && (

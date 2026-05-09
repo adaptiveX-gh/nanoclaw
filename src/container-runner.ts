@@ -44,6 +44,7 @@ export interface ContainerInput {
   capabilities?: import('./types.js').CapabilityProfile;
   skillsAllowlist?: string[];
   maxOutputTokens?: number;
+  envOverrides?: Record<string, string>;
 }
 
 export interface ContainerOutput {
@@ -366,6 +367,7 @@ function buildContainerArgs(
   containerName: string,
   groupFolder: string,
   maxOutputTokens?: number,
+  envOverrides?: Record<string, string>,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -496,6 +498,13 @@ function buildContainerArgs(
     '8000';
   args.push('-e', `CLAUDE_CODE_MAX_OUTPUT_TOKENS=${effectiveMaxTokens}`);
 
+  // Per-task env overrides (e.g. CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 for monitor tasks)
+  if (envOverrides) {
+    for (const [k, v] of Object.entries(envOverrides)) {
+      args.push('-e', `${k}=${v}`);
+    }
+  }
+
   // Forward group folder name
   args.push('-e', `GROUP_FOLDER=${groupFolder}`);
 
@@ -565,6 +574,7 @@ export async function runContainerAgent(
     containerName,
     group.folder,
     input.maxOutputTokens,
+    input.envOverrides,
   );
 
   logger.debug(

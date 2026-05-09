@@ -84,6 +84,7 @@ export interface ScheduledTask {
   skills_allowlist?: string | null;
   max_output_tokens?: number | null;
   capabilities?: string | null;
+  env_overrides?: string | null;
 }
 
 export interface TaskRunLog {

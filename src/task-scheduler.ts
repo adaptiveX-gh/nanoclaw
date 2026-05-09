@@ -35,9 +35,7 @@ const OPUS_PATTERNS = [
   /indicator.*orthogonality/i,
 ];
 
-const HAIKU_PATTERNS = [
-  /observability.?(collector|bleeding)/i,
-];
+const HAIKU_PATTERNS = [/observability.?(collector|bleeding)/i];
 
 function resolveModel(prompt: string): string | undefined {
   for (const pat of OPUS_PATTERNS) {
@@ -226,6 +224,9 @@ async function runTask(
     const skillsAllowlist = task.skills_allowlist
       ? (JSON.parse(task.skills_allowlist) as string[])
       : undefined;
+    const envOverrides = task.env_overrides
+      ? (JSON.parse(task.env_overrides) as Record<string, string>)
+      : undefined;
     const output = await runContainerAgent(
       group,
       {
@@ -241,6 +242,7 @@ async function runTask(
           group.containerConfig?.capabilities,
         skillsAllowlist,
         maxOutputTokens: resolveMaxOutputTokens(task),
+        envOverrides,
       },
       (proc, containerName) =>
         deps.onProcess(

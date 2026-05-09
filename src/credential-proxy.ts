@@ -62,11 +62,18 @@ export function startCredentialProxy(
         const oauthToken =
           secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
 
+        // Inject cache_control into /v1/messages system prompt blocks
+        const outBody = injectCacheControl(
+          body,
+          req.url,
+          req.headers['content-type'],
+        );
+
         const headers: Record<string, string | number | string[] | undefined> =
           {
             ...(req.headers as Record<string, string>),
             host: upstreamUrl.host,
-            'content-length': body.length,
+            'content-length': outBody.length,
           };
 
         // Strip hop-by-hop headers that must not be forwarded by proxies
@@ -124,7 +131,7 @@ export function startCredentialProxy(
           }
         });
 
-        upstream.write(body);
+        upstream.write(outBody);
         upstream.end();
       });
     });
@@ -139,6 +146,54 @@ export function startCredentialProxy(
 
     server.on('error', reject);
   });
+}
+
+/**
+ * Inject `cache_control: {type: "ephemeral"}` into system prompt blocks of
+ * /v1/messages requests. This ensures the system prompt (CLAUDE.md + skills)
+ * is cached by the Anthropic API, reducing input token cost by ~90% on cache hits.
+ *
+ * Only applies when:
+ * - Request path is /v1/messages
+ * - Content-Type includes application/json
+ * - Body is valid JSON with a `system` field
+ *
+ * Safe: wraps in try/catch and returns original body on any failure.
+ */
+export function injectCacheControl(
+  body: Buffer,
+  path: string | undefined,
+  contentType: string | undefined,
+): Buffer {
+  if (!path?.includes('/v1/messages')) return body;
+  if (!contentType?.includes('application/json')) return body;
+
+  try {
+    const parsed = JSON.parse(body.toString('utf-8')) as Record<string, unknown>;
+    if (!parsed.system) return body;
+
+    type SystemBlock = { type?: string; text?: string; cache_control?: unknown };
+
+    // Convert string system to a single-element array
+    if (typeof parsed.system === 'string') {
+      parsed.system = [{ type: 'text', text: parsed.system }] as SystemBlock[];
+    }
+
+    if (!Array.isArray(parsed.system)) return body;
+
+    let injected = false;
+    for (const block of parsed.system as SystemBlock[]) {
+      if (block.type === 'text' && !block.cache_control) {
+        block.cache_control = { type: 'ephemeral' };
+        injected = true;
+      }
+    }
+
+    if (!injected) return body;
+    return Buffer.from(JSON.stringify(parsed), 'utf-8');
+  } catch {
+    return body;
+  }
 }
 
 /** Detect which auth mode the host is configured for. */
