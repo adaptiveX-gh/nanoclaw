@@ -135,6 +135,14 @@
     }
   },
 
+  "HEAVY_STRATEGIST": {
+    "_comment": "Budget and staleness controls for heavy-strategist deliberation runs. Token cost ~7x a standard strategyzer run. Strategyzer reads staleness_hours to decide whether to use a cached spec.",
+    "max_runs_per_day": 3,
+    "staleness_hours": 24,
+    "min_deployment_failures_for_escalation": 2,
+    "max_iterations": 2
+  },
+
   "SEASON": {
     "_comment": "28-day performance season. One active at a time. Created by add-season installer. Dashboard computed by monitor-portfolio Step 8e.",
     "duration_days": 28,
@@ -367,6 +375,14 @@
     "min_obs": 30,
     "min_tail_obs": 3,
     "risk_off_multiplier_threshold": 0.50,
-    "deploy_gate_multiplier_threshold": 0.60
+    "deploy_gate_multiplier_threshold": 0.60,
+    "promotion_criteria": {
+      "_comment": "Thresholds for promoting from shadow mode to active CVaR scaling. All must be met before flipping shadow_mode to false. Displayed on portfolio-intel.json.",
+      "min_shadow_days": 14,
+      "min_shadow_entries": 14,
+      "multiplier_discriminating_pct": 0.30,
+      "confidence_sufficient_pct": 0.50,
+      "max_consecutive_failures": 3
+    }
   }
 }

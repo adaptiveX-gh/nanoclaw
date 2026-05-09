@@ -181,6 +181,95 @@ Log: "Tail risk: CVaR={result.cvar_daily_pct}% (α={result.alpha}),
       top_contributor={result.top_tail_contributor}"
 ```
 
+**CVaR shadow log** — append one line to `knowledge/cvar-shadow-log.jsonl`:
+
+```json
+{
+  "ts": "<ISO-8601 UTC>",
+  "cvar_daily_pct": 1.23,
+  "multiplier": 0.85,
+  "multiplier_raw": 0.82,
+  "mode": "SCALING",
+  "confidence": "high",
+  "n_obs": 45,
+  "top_contributor": "theforce-xrp-1h",
+  "would_have_blocked": false
+}
+```
+
+`would_have_blocked` = true when `result.multiplier < cfg.deploy_gate_multiplier_threshold`.
+This is the key counterfactual: would active CVaR have blocked trial deployments today?
+
+If the append fails, log a warning and continue — passive data collection only.
+
+**Portfolio intel snapshot** — read the shadow log, evaluate promotion criteria,
+write `reports/portfolio-intel.json`. Modeled on the HMM `regime-intel.json` pattern.
+
+```
+shadow_log = read_jsonl("knowledge/cvar-shadow-log.jsonl")  # [] if missing
+promo_cfg = cfg.get("promotion_criteria", {})
+
+shadow_days = (now - shadow_log[0].ts).days if shadow_log else 0
+shadow_entries = len(shadow_log)
+
+# Criterion 1: enough calendar days
+min_days_met = shadow_days >= promo_cfg.min_shadow_days
+
+# Criterion 2: enough actual entries (no big gaps)
+min_entries_met = shadow_entries >= promo_cfg.min_shadow_entries
+
+# Criterion 3: multiplier discriminates (not always 1.0)
+discriminating_days = count(e for e in shadow_log if e.multiplier < 0.95)
+discriminating_pct = discriminating_days / shadow_entries if shadow_entries else 0
+discriminating_met = discriminating_pct >= promo_cfg.multiplier_discriminating_pct
+
+# Criterion 4: confidence is sufficient
+confident_days = count(e for e in shadow_log if e.confidence in ["high", "medium"])
+confident_pct = confident_days / shadow_entries if shadow_entries else 0
+confident_met = confident_pct >= promo_cfg.confidence_sufficient_pct
+
+# Criterion 5: no long failure streaks (consecutive missing days)
+# Compare expected daily entries vs actual — find max gap
+max_gap = max consecutive calendar days without an entry in shadow_log
+failures_met = max_gap < promo_cfg.max_consecutive_failures
+
+promotion_ready = all([min_days_met, min_entries_met, discriminating_met,
+                       confident_met, failures_met])
+```
+
+Write `reports/portfolio-intel.json`:
+
+```json
+{
+  "shadow_mode": true,
+  "shadow_days": 12,
+  "shadow_entries": 12,
+  "promotion_ready": false,
+  "promotion_criteria": {
+    "min_shadow_days":           {"met": false, "value": 12, "threshold": 14},
+    "min_shadow_entries":        {"met": false, "value": 12, "threshold": 14},
+    "multiplier_discriminating": {"met": true,  "value": 0.42, "threshold": 0.30},
+    "confidence_sufficient":     {"met": true,  "value": 0.67, "threshold": 0.50},
+    "no_consecutive_failures":   {"met": true,  "value": 0, "threshold": 3}
+  },
+  "recent_multipliers": [0.85, 0.91, 1.0, 0.78, 0.95, 0.88, 1.0],
+  "would_have_blocked_count": 2,
+  "avg_multiplier_7d": 0.88,
+  "last_updated": "<ISO>"
+}
+```
+
+`recent_multipliers` = last 7 entries' `multiplier` values (most recent last).
+`would_have_blocked_count` = total entries where `would_have_blocked == true`.
+`avg_multiplier_7d` = mean of `recent_multipliers`.
+
+When `promotion_ready` flips to true, log:
+`"CVaR PROMOTION READY: all criteria met after {shadow_days} days — recommend flipping TAIL_RISK.shadow_mode to false"`
+
+Graceful degradation: missing shadow log → 0 entries, all criteria fail,
+`promotion_ready: false`. Missing `promotion_criteria` config → skip intel
+evaluation entirely, write `portfolio-intel.json` with `promotion_ready: null`.
+
 **Risk-off gating** (when `shadow_mode == false`):
 
 When the risk multiplier falls below the deploy gate threshold, block
@@ -791,6 +880,69 @@ write auto-mode/season.json
 
 Log: "Season dashboard: Day {day_number}/{season.duration_days}, alpha={alpha_pct}, slots={slots_filled}/{slots_total}, {len(concerns)} concerns"
 ```
+
+### Step 8f: REGIME EFFECTIVENESS (daily, same cadence as Step 8)
+
+Skip unless `knowledge/live-outcomes.jsonl` exists with >= 5 entries.
+
+Compute regime prediction lift from accumulated deployment outcomes.
+Uses the archetype taxonomy (`preferred_regimes`, `anti_regimes`) to classify
+each historical deployment as preferred, anti, or neutral at deploy time.
+
+```
+outcomes = read_jsonl("knowledge/live-outcomes.jsonl")
+if len(outcomes) < 5: skip
+
+# Classify each outcome by regime alignment at deploy time
+for o in outcomes:
+  if o.regime_at_deploy is null: o.alignment = "unknown"
+  elif o.regime_at_deploy in archetype_taxonomy[o.archetype].preferred_regimes: o.alignment = "preferred"
+  elif o.regime_at_deploy in archetype_taxonomy[o.archetype].anti_regimes: o.alignment = "anti"
+  else: o.alignment = "neutral"
+
+preferred = [o for o in outcomes if o.alignment == "preferred"]
+anti = [o for o in outcomes if o.alignment == "anti"]
+other = [o for o in outcomes if o.alignment in ("neutral", "unknown")]
+
+# 1. Graduation rate lift
+preferred_grad_rate = count(o.outcome == "graduated" for o in preferred) / len(preferred) if preferred else null
+other_grad_rate = count(o.outcome == "graduated" for o in (anti + other)) / len(anti + other) if (anti + other) else null
+regime_lift_graduation = preferred_grad_rate - other_grad_rate if both non-null else null
+
+# 2. P&L lift
+preferred_avg_pnl = mean(o.pnl_pct for o in preferred) if preferred else null
+anti_avg_pnl = mean(o.pnl_pct for o in anti) if anti else null
+regime_lift_pnl = preferred_avg_pnl - anti_avg_pnl if both non-null else null
+
+# 3. Verdict
+verdict = "insufficient_data" if len(outcomes) < 10
+        else "positive" if (regime_lift_graduation ?? 0) > 0.10 or (regime_lift_pnl ?? 0) > 1.0
+        else "neutral" if (regime_lift_graduation ?? 0) > -0.05
+        else "negative"
+
+Log: "REGIME EFFECTIVENESS: {verdict} — preferred grad={preferred_grad_rate:.0%} vs rest={other_grad_rate:.0%} (lift={regime_lift_graduation:+.0%}), pref P&L={preferred_avg_pnl:+.1f}% vs anti={anti_avg_pnl:+.1f}%, n={len(outcomes)}"
+```
+
+Write `reports/regime-effectiveness.json`:
+```json
+{
+  "ts": "<ISO>",
+  "n_outcomes": 15,
+  "preferred_deploys": 8,
+  "anti_deploys": 2,
+  "other_deploys": 5,
+  "preferred_grad_rate": 0.50,
+  "other_grad_rate": 0.20,
+  "regime_lift_graduation": 0.30,
+  "preferred_avg_pnl": 2.1,
+  "anti_avg_pnl": -3.2,
+  "regime_lift_pnl": 5.3,
+  "verdict": "positive"
+}
+```
+
+Graceful degradation: missing or sparse `live-outcomes.jsonl` → skip entirely,
+no file written. Verdict `"insufficient_data"` when < 10 outcomes.
 
 ## Epilogue — Sync and Log
 

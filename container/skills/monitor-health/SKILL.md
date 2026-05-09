@@ -14,13 +14,7 @@ description: >
 ---
 # Monitor — Pipeline Lifecycle Orchestrator
 
-Manages paper trading bot deployments. Reads market-timing scores,
-monitors bot health, gates signals by regime, and graduates winners.
-
 ## Split Monitor Architecture
-
-This skill handles the fast-path health loop (Steps 0-5, 9). Three
-companion skills handle slower or less frequent work:
 
 | Skill | Steps | Schedule | Purpose |
 |-------|-------|----------|---------|
@@ -28,13 +22,6 @@ companion skills handle slower or less frequent work:
 | `monitor-deploy` | 6 | `7,37 * * * *` | Slot allocation, backtest verification |
 | `monitor-kata` | 7 | `20 * * * *` | Kata race completion, walk-forward |
 | `monitor-portfolio` | 8-8d | `0 0 * * *` | Portfolio correlation, tail risk, daily rollup |
-
-All four skills share the same workspace files. GroupQueue serialization
-ensures no concurrent access. Only this skill increments `tick_id`.
-
-**Auto-Mode NEVER modifies strategy code.** If a strategy underperforms,
-Auto-Mode retires it. The boundary is sacred: Auto-Mode operates
-strategies, Research improves them.
 
 ## Dependencies
 
@@ -47,20 +34,6 @@ strategies, Research improves them.
 | `freqtrade-mcp` | Bot status, profit, balance (health monitoring) |
 | `aphexdata` | Audit trail for all lifecycle events |
 | `tv-signals` | TV source P&L tracking (reads `tv-signals.json`, optional) |
-
-**Optional config:** `scoring-config.json` — if present, overrides thresholds in
-Steps 2 (signal hysteresis, deploy threshold), 4 (retirement DD multiplier, consecutive
-losses), and 5 (graduation Sharpe, max DD). Keys: `SIGNAL_HYSTERESIS_TICKS`,
-`DEPLOY_THRESHOLD`, `RETIREMENT_GATES`, `GRADUATION_GATES`.
-See `setup/scoring-config-defaults.json` for all keys and defaults.
-
----
-
-## Console Sync — Automatic
-
-State files are pushed to the dashboard automatically by the host-side
-`console-sync` loop every 60 seconds. No manual sync calls needed —
-just write the file and console-sync picks it up on the next cycle.
 
 ---
 
@@ -169,23 +142,6 @@ then add `_checksum` field before writing.
 
 ---
 
-## Unified Loop Mapping
-
-The 9-step tick cycle implements the **sense-score-act-measure-learn** loop:
-
-| Loop Phase | Steps | What Happens |
-|------------|-------|-------------|
-| **SENSE** | 1 (Read State), 2 (Refresh Regimes) | Read all state: campaigns, regimes, cell grid, portfolio |
-| **SCORE** | 2 (Signal Gating) | Score each bot's cell composite, apply hysteresis thresholds |
-| **ACT** | 4 (Early Retirement), 5 (Graduation), 6 (Fill Slots), 7 (Kata Worker) | Retire, graduate, deploy, or advance kata based on scores |
-| **MEASURE** | 3 (Update Metrics), 8 (Portfolio Correlation) | Read live P&L, compute portfolio-level metrics |
-| **LEARN** | 8b (Regime Transitions), 9 (Log + Sync) | Record outcomes, compute transition probabilities, feed back to future cycles |
-
-This is the same loop that drives strategy improvement (kata) and gate improvement
-(gate kata). Monitor applies it to the live portfolio; kata applies it to simulation.
-
----
-
 ## 15-Minute Health Check (9 Steps)
 
 This is the core algorithm. Execute these steps in order on every scheduled tick.
@@ -252,6 +208,49 @@ Outcome examples: `"read_2_campaigns"`, `"regime_refreshed_20_pairs"`,
 
 This file is append-only JSONL. No schema validation. Cap at 30 days
 of entries — older entries can be rotated but that's secondary.
+
+**0a. Live-outcomes backfill (one-time reconciliation):**
+
+If `knowledge/live-outcomes.jsonl` does not exist OR its entry count is less than
+the number of retired/graduated campaigns in `auto-mode/campaigns.json`:
+
+```
+outcomes = read_jsonl("knowledge/live-outcomes.jsonl") ?? []
+existing_keys = set((o.strategy, o.pair, o.timeframe) for o in outcomes)
+campaigns = read("auto-mode/campaigns.json").campaigns
+backfilled = 0
+
+for c in campaigns where c.state in {"retired", "graduated", "graduated_internal_only", "graduated_external"}:
+  key = (c.strategy, c.pair, c.timeframe)
+  if key in existing_keys: continue
+
+  append_jsonl("knowledge/live-outcomes.jsonl", {
+    ts: c.paper_trading.retired_at ?? c.graduation?.graduated_at ?? c.deployed_at,
+    strategy: c.strategy, archetype: c.archetype,
+    correlation_group: c.correlation_group, pair: c.pair, timeframe: c.timeframe,
+    outcome: "graduated" if c.state.startswith("graduated") else "retired_" + (c.paper_trading.retire_reason ?? "unknown"),
+    regime_at_deploy: c.paper_trading.regime_at_deploy ?? null,
+    regime_at_outcome: null,
+    days_deployed: c.paper_trading.days_deployed ?? null,
+    trade_count: c.paper_trading.current_trade_count ?? 0,
+    pnl_pct: c.paper_trading.current_pnl_pct ?? 0,
+    live_sharpe: c.graduation?.live_sharpe ?? c.paper_trading.current_sharpe ?? null,
+    win_rate: c.paper_trading.current_win_rate ?? null,
+    divergence_pct: c.paper_trading.divergence_pct ?? null,
+    execution_quality: c.paper_trading.execution_quality ?? null,
+    dsr: c.wfo_metrics?.dsr ?? null, pbo: c.wfo_metrics?.pbo ?? null,
+    source: c.source ?? null, candidate_quality: c.candidate_quality ?? null,
+    obstacle_at_routing: null, gap_score_at_discover: null,
+    regime_breakdown: null
+  })
+  backfilled += 1
+
+if backfilled > 0:
+  Log: "BACKFILLED {backfilled} live-outcomes entries from campaigns.json"
+```
+
+Once all campaigns are reconciled, this check costs one line-count comparison
+per tick and exits immediately. No repeated backfills.
 
 ### Step 1: READ STATE
 
@@ -801,6 +800,28 @@ write auto-mode/deployments.json
 aphexdata_record_event(verb_id="kata_retired_early", ...)
 Post to feed: "Early retirement: {strategy} on {pair}/{tf} — {reason}"
 Message user: "{strategy} retired early — {reason}"
+
+# Append live outcome (non-blocking — log warning on failure, create knowledge dir if missing)
+append_jsonl("knowledge/live-outcomes.jsonl", {
+  ts: now, strategy, archetype, correlation_group, pair, timeframe,
+  outcome: "retired_trigger_" + trigger_code,
+  regime_at_deploy: campaign.paper_trading.regime_at_deploy ?? null,
+  regime_at_outcome: cell_grid.find(archetype, pair, timeframe)?.regime ?? null,
+  days_deployed: (now - campaign.deployed_at).days,
+  trade_count: campaign.paper_trading.current_trade_count ?? 0,
+  pnl_pct: campaign.paper_trading.current_pnl_pct ?? 0,
+  live_sharpe: campaign.paper_trading.current_sharpe ?? null,
+  win_rate: campaign.paper_trading.current_win_rate ?? null,
+  divergence_pct: campaign.paper_trading.divergence_pct ?? null,
+  execution_quality: campaign.paper_trading.execution_quality ?? null,
+  dsr: campaign.wfo_metrics?.dsr ?? null,
+  pbo: campaign.wfo_metrics?.pbo ?? null,
+  source: campaign.source ?? null,
+  candidate_quality: campaign.candidate_quality ?? null,
+  obstacle_at_routing: campaign.kata_routing?.obstacle ?? null,
+  gap_score_at_discover: campaign.gap_score_at_discover ?? null,
+  regime_breakdown: campaign.paper_trading.paper_pnl?.by_regime ?? null
+})
 ```
 
 ### Step 5: GRADUATION CHECK
@@ -995,16 +1016,35 @@ if dep:
   dep.state = "graduated_internal_only"
   dep.graduated = now
 
-  # Graduated stake boost — proven strategies earn more capital.
-  # Recalculate effective_stake_pct with graduated_stake_multiplier (default 1.3×).
+  # Graduated stake boost — re-evaluate conviction with current regime, then apply multiplier.
   grad_mult = portfolio_rules.CAPITAL_ALLOCATION.graduated_stake_multiplier (default 1.3)
   old_stake = campaign.paper_trading.effective_stake_pct
-  new_stake = clamp(old_stake * grad_mult,
-                    campaign.paper_trading.base_stake_pct * 0.4,
+  base = campaign.paper_trading.base_stake_pct
+  vw = campaign.paper_trading.volume_weight ?? 1.0
+
+  # Re-read current regime conviction for this cell (same formula as monitor-deploy)
+  cell = cell_grid.find(archetype=campaign.archetype, pair=campaign.pair, timeframe=campaign.timeframe)
+  cs = portfolio_rules.CONVICTION_SCALING (or defaults)
+  if cs.enabled AND cell:
+    archetype_regime_rel = classify(cell.regime, archetype.preferred_regimes, archetype.anti_regimes)
+    if archetype_regime_rel == "preferred" AND cell.conviction >= cs.conviction_floor:
+      t = (cell.conviction - cs.conviction_floor) / (100 - cs.conviction_floor)
+      conviction_factor = 1.0 + t * (cs.max_boost - 1.0)
+    elif archetype_regime_rel == "anti":
+      conviction_factor = cs.anti_regime_penalty
+    else:
+      conviction_factor = cs.neutral_regime_factor
+  else:
+    conviction_factor = 1.0  # fallback: no scaling if cell missing or disabled
+
+  # Recompute from base components with fresh conviction, then apply grad_mult
+  refreshed_base = base * vw * conviction_factor
+  new_stake = clamp(refreshed_base * grad_mult,
+                    base * 0.4,
                     portfolio_rules.CAPITAL_ALLOCATION.max_per_deployment_pct)
   campaign.paper_trading.effective_stake_pct = new_stake
   dep.effective_stake_pct = new_stake
-  Log: "GRADUATED STAKE BOOST: {strategy} {old_stake:.1f}% → {new_stake:.1f}% (×{grad_mult})"
+  Log: "GRADUATED STAKE: {strategy} {old_stake:.1f}% → {new_stake:.1f}% (base={base}% × vw={vw:.2f} × conv={conviction_factor:.2f} × grad={grad_mult})"
 
   write auto-mode/deployments.json
 
@@ -1043,6 +1083,28 @@ aphexdata_record_event(verb_id="kata_graduated_internal_only", ...)
 Post to feed: "GRADUATED (internal bridge): {strategy} on {pair}/{tf}
   — {days} days live, Sharpe {sharpe}, {trades} trades, P&L {pnl}%
   — External webhooks unlock in 3 days if live_sharpe stays >= 0.5"
+
+# Append live outcome (non-blocking — log warning on failure, create knowledge dir if missing)
+append_jsonl("knowledge/live-outcomes.jsonl", {
+  ts: now, strategy, archetype, correlation_group, pair, timeframe,
+  outcome: "graduated",
+  regime_at_deploy: campaign.paper_trading.regime_at_deploy ?? null,
+  regime_at_outcome: cell_grid.find(archetype, pair, timeframe)?.regime ?? null,
+  days_deployed: (now - campaign.deployed_at).days,
+  trade_count: campaign.paper_trading.current_trade_count ?? 0,
+  pnl_pct: campaign.paper_trading.current_pnl_pct ?? 0,
+  live_sharpe: campaign.graduation.live_sharpe ?? campaign.paper_trading.current_sharpe ?? null,
+  win_rate: campaign.paper_trading.current_win_rate ?? null,
+  divergence_pct: campaign.paper_trading.divergence_pct ?? null,
+  execution_quality: campaign.paper_trading.execution_quality ?? null,
+  dsr: campaign.wfo_metrics?.dsr ?? null,
+  pbo: campaign.wfo_metrics?.pbo ?? null,
+  source: campaign.source ?? null,
+  candidate_quality: campaign.candidate_quality ?? null,
+  obstacle_at_routing: campaign.kata_routing?.obstacle ?? null,
+  gap_score_at_discover: campaign.gap_score_at_discover ?? null,
+  regime_breakdown: campaign.paper_trading.paper_pnl?.by_regime ?? null
+})
 ```
 
 **BRIDGE → EXTERNAL promotion (checked every tick for bridged campaigns):**
@@ -1125,6 +1187,28 @@ Update TRADE.md on retirement:
 
 aphexdata_record_event(verb_id="kata_retired", ...)
 Post to feed: "Retired: {strategy} — {reason}"
+
+# Append live outcome (non-blocking — log warning on failure, create knowledge dir if missing)
+append_jsonl("knowledge/live-outcomes.jsonl", {
+  ts: now, strategy, archetype, correlation_group, pair, timeframe,
+  outcome: "retired_trigger_" + trigger_code,
+  regime_at_deploy: campaign.paper_trading.regime_at_deploy ?? null,
+  regime_at_outcome: cell_grid.find(archetype, pair, timeframe)?.regime ?? null,
+  days_deployed: (now - campaign.deployed_at).days,
+  trade_count: campaign.paper_trading.current_trade_count ?? 0,
+  pnl_pct: campaign.paper_trading.current_pnl_pct ?? 0,
+  live_sharpe: campaign.paper_trading.current_sharpe ?? null,
+  win_rate: campaign.paper_trading.current_win_rate ?? null,
+  divergence_pct: campaign.paper_trading.divergence_pct ?? null,
+  execution_quality: campaign.paper_trading.execution_quality ?? null,
+  dsr: campaign.wfo_metrics?.dsr ?? null,
+  pbo: campaign.wfo_metrics?.pbo ?? null,
+  source: campaign.source ?? null,
+  candidate_quality: campaign.candidate_quality ?? null,
+  obstacle_at_routing: campaign.kata_routing?.obstacle ?? null,
+  gap_score_at_discover: campaign.gap_score_at_discover ?? null,
+  regime_breakdown: campaign.paper_trading.paper_pnl?.by_regime ?? null
+})
 ```
 
 **Evolution event logging (Step 5 only):**
@@ -1134,15 +1218,10 @@ Append to `knowledge/evolution-events.jsonl`:
 - RETIRE: `{operation: "rollback", rollback_reason: "<trigger_code>"}`
 - `event_id` = `evo_` + date + `_` + first 8 hex of SHA-256(campaign_id + timestamp).
 
-**Live outcome logging (Step 4 retirements + Step 5 graduations):**
-
-Append to `knowledge/live-outcomes.jsonl`. Fields: `ts`, `strategy`, `archetype`,
-`correlation_group`, `pair`, `timeframe`, `outcome` (graduated | retired_trigger_X),
-`regime_at_deploy/outcome`, `days_deployed`, `trade_count`, `pnl_pct`, `live_sharpe`,
-`win_rate`, `divergence_pct`, `execution_quality`, `dsr`, `pbo`, `source`,
-`candidate_quality`, `obstacle_at_routing`, `gap_score_at_discover`, `regime_breakdown`.
-
-Non-blocking: create knowledge dir if missing, log warning on write failure.
+**Live outcome logging** is inline in the Step 4 "On early retire" and Step 5
+GRADUATE/RETIRE code blocks above. Each appends to `knowledge/live-outcomes.jsonl`
+with null-safe fields. Non-blocking: create knowledge dir if missing, log warning
+on write failure.
 
 ### Step 9: LOG + SYNC
 
@@ -1210,25 +1289,7 @@ Include state changes table + paper bots summary. Competition rollup handled by 
 
 ## Strategy-to-Archetype Matching
 
-Strategies are matched to archetypes via header comment tags in `.py` files:
-
-```python
-# ARCHETYPE: TREND_MOMENTUM
-# GRADUATED: 2026-03-20
-# WALK_FORWARD_DEGRADATION: 18%
-# VALIDATED_PAIRS: BTC/USDT, ETH/USDT
-class EMA_Crossover_v3(IStrategy):
-    ...
-```
-
-Scan first 10 lines of each `.py` in `/workspace/group/user_data/strategies/`.
-
-**Kata graduation convention:** When a strategy graduates from kata-bridge, the
-graduation step should add these header tags. This links the Research → Operations
-handoff.
-
-**Fallback** if no tags: query `aphexdata_query_events(verb_id="attested", object_type="strategy")`
-for strategy metadata including archetype classification.
+Scan Python header for `# ARCHETYPE: XXX`. If missing, call `aphexdata_query_events(verb_id="attested", object_type="strategy")` to infer from strategy name and historical performance. Valid archetypes: see archetype-taxonomy skill.
 
 ---
 
@@ -1247,89 +1308,31 @@ If cell-grid is **> 8 hours old**:
 
 ## State File Schemas
 
-All schemas are defined in `docs/state-contract.md`. Key files at `/workspace/group/auto-mode/`:
-
-- **roster.json** — Pre-staged deployments. Each entry: strategy_name, archetype, validated_pairs, timeframe, wf_sharpe, cells[]. Cell status: `staged`→`paper_trading`→`graduated`→`retired`.
-- **configs/{strategy}_{pair}_{tf}.json** — Launch-ready FreqTrade config fragments. All use `dry_run: true`, `dry_run_wallet: 1000`.
-- **campaigns.json** (at `research-planner/`) — Source of truth for paper bot state. Monitor reads/writes `campaign.state` and `campaign.paper_trading.*` fields.
-- **market-prior.json** — Regime data: `regimes[symbol][horizon]`, `previous_composites`, `signal_hysteresis`, `transition` (v2 BOCPD data).
-- **config.json** — Optional user overrides (deploy_threshold, dry_run, etc.). Defaults from `scoring-config.json`.
-- **deployments.json** — Authoritative slot state. `_meta.last_tick`, `_meta.tick_count` track tick health.
-
-Key `campaign.paper_trading` fields: `bot_deployment_id`, `deployed_at`, `validation_deadline`, `current_pnl_pct`, `current_trade_count`, `current_sharpe`, `current_max_dd`, `current_win_rate`, `current_avg_win_pct`, `current_avg_loss_pct`, `max_consecutive_losses`, `ticks_signals_on/off`, `investigation_mode`, `investigation_reason`, `extended`, `regime_extension`, `rr_extension`, `feasibility_warning`, `execution_quality`, `slippage_as_pct_of_pnl`, `divergence_pct`, `eviction_priority`, `eviction_factors[]`.
-
----
-
-## Quick Command Table
-
-### Deployment Commands
-| User Says | Auto-Mode Does |
-|-----------|---------------|
-| "Deploy paper bot {strategy} {pair} {tf}" | Start dry-run container, create campaign |
-| "Retire {strategy} {pair}" | Stop container, campaign.state → retired |
-| "Send to research {strategy_name}" | Retire + auto-route to kata-bridge with obstacle context (competition: immediate; normal: recommend) |
-
-### Roster & Staging Commands
-| User Says | Auto-Mode Does |
-|-----------|---------------|
-| "Stage all graduated strategies" | Scan strategy library, populate roster.json, generate configs/ |
-| "Show roster" | List all staged deployments with status per cell |
-
-### Monitoring Commands
-| User Says | Auto-Mode Does |
-|-----------|---------------|
-| "Show auto-mode status" | Read all state files, display bot table with states, scores, P&L |
-| "Run auto-mode check now" | Execute the full 9-step check immediately |
-| "Show portfolio health" | Display portfolio correlation, strategy count, Sharpe estimate |
-| "Show research priorities" | Query missed_opportunity_daily_summary from last 7 days. Rank cells by frequency × avg_composite. |
-
-### System Commands
-| User Says | Auto-Mode Does |
-|-----------|---------------|
-| "Set threshold deploy=4.0" | Update config.json with new threshold value |
-| "Disable auto-mode" | `pause_task` for all: `monitor_health_check`, `monitor_deploy`, `monitor_kata`, `monitor_portfolio` |
-| "Enable auto-mode" | `resume_task` for all: `monitor_health_check`, `monitor_deploy`, `monitor_kata`, `monitor_portfolio` |
-| "EMERGENCY STOP" | Stop ALL bots, pause scheduler, retire all campaigns |
-| "Set auto-mode to dry run" | All checks run but no freqtrade actions |
+See `docs/state-contract.md`. Key files in `auto-mode/`: roster.json, deployments.json,
+campaigns.json (in research-planner/), market-prior.json, configs/{name}_{pair}_{tf}.json.
 
 ---
 
 ## Handoffs Between Modes
 
-- **Monitor → Kata**: On retirement, recommend "Improve {strategy}" for kata-bridge.
-- **Kata → Monitor**: Graduation adds header tags → "Stage all graduated" → roster ready.
-- **Monitor reads** (does NOT run): `macro-latest.json`, `onchain-latest.json`, `sentiment-latest.json`.
+On retirement, recommend kata-bridge. Monitor reads but does NOT run: macro, onchain, sentiment.
 
 ---
 
 ## AphexDATA Event Conventions
 
-Key verb_ids: `auto_mode_check`, `deployment_activated`, `kata_graduated`,
-`kata_retired`, `kata_retired_early`, `signal_published`, `emergency_stop`,
-`slot_filled`, `orphan_detected`, `orphan_auto_retired`, `slot_snapshot`,
-`overfit_evict`, `execution_block`, `regime_collapse_flagged`, `degrading_flagged`.
-All events use `verb_category` (monitoring/execution/risk/analysis) and
-`object_type` (report/campaign/deployment/portfolio).
+Key verb_ids: `deployment_activated`, `kata_graduated`, `kata_retired_early`,
+`orphan_auto_retired`, `regime_collapse_flagged`. Use verb_category + object_type on all events.
 
 ---
 
-## Scheduled Execution
-
-See `installers/add-monitor/SKILL.md` for task setup. Summary:
-- `monitor_health_check`: `*/15 * * * *` (this skill, Steps 0-5, 9)
-- `monitor_deploy`: `7,37 * * * *` (Step 6)
-- `monitor_kata`: `20 * * * *` (Step 7)
-- `monitor_portfolio`: `0 0 * * *` (Steps 8-8d)
 ---
 
 ## Anti-Patterns
 
-1. **REGIME CHURN** — Use hysteresis, never toggle on a single tick.
-2. **MODIFYING STRATEGIES** — Auto-Mode NEVER changes strategy code. Retire instead.
-3. **OVER-REPORTING** — Message on state changes only. Silent when nothing changed.
-4. **IGNORING CORRELATION** — Never stack correlated archetypes on correlated pairs.
-5. **ASSEMBLING AT DEPLOY TIME** — Pre-stage at graduation. Deployment = flip a switch.
-6. **FALSE CONFIDENCE** — High composite ≠ profit. It gates signals, not returns.
+- **REGIME CHURN**: Use hysteresis — never toggle on a single tick.
+- **OVER-REPORTING**: Message on state changes only. Silent ticks produce no output.
+- **ASSEMBLING AT DEPLOY TIME**: Pre-stage at graduation. Deployment = flip a switch.
 
 ---
 

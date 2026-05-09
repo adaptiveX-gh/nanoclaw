@@ -402,6 +402,7 @@ for cand in ranked:
       bot_deployment_id: bot.id,
       validation_deadline: now + paper_validation[tf].days,
       effective_stake_pct, volume_weight: vw, base_stake_pct: base,
+      regime_at_deploy: cell.regime,
       ...standard warm-up fields...
     }
   }

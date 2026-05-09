@@ -169,10 +169,17 @@ export function injectCacheControl(
   if (!contentType?.includes('application/json')) return body;
 
   try {
-    const parsed = JSON.parse(body.toString('utf-8')) as Record<string, unknown>;
+    const parsed = JSON.parse(body.toString('utf-8')) as Record<
+      string,
+      unknown
+    >;
     if (!parsed.system) return body;
 
-    type SystemBlock = { type?: string; text?: string; cache_control?: unknown };
+    type SystemBlock = {
+      type?: string;
+      text?: string;
+      cache_control?: unknown;
+    };
 
     // Convert string system to a single-element array
     if (typeof parsed.system === 'string') {
