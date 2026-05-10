@@ -35,7 +35,10 @@ const OPUS_PATTERNS = [
   /indicator.*orthogonality/i,
 ];
 
-const HAIKU_PATTERNS = [/observability.?(collector|bleeding)/i, /monitor.?kata/i];
+const HAIKU_PATTERNS = [
+  /observability.?(collector|bleeding)/i,
+  /monitor.?kata/i,
+];
 
 function resolveModel(prompt: string): string | undefined {
   for (const pat of OPUS_PATTERNS) {
