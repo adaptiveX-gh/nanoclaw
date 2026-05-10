@@ -5,7 +5,13 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getAllMessagesSince, getTaskById, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getAllMessagesSince,
+  getTaskById,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -161,9 +167,16 @@ export function startIpcWatcher(deps: IpcDeps): void {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               fs.unlinkSync(filePath);
-              const responseFile = file.replace('.request.json', '.response.json');
+              const responseFile = file.replace(
+                '.request.json',
+                '.response.json',
+              );
               const responsePath = path.join(queriesDir, responseFile);
-              const response = processQuery(data, sourceGroup, registeredGroups);
+              const response = processQuery(
+                data,
+                sourceGroup,
+                registeredGroups,
+              );
               fs.writeFileSync(responsePath, JSON.stringify(response, null, 2));
               logger.debug(
                 { queryId: data.queryId, type: data.type, sourceGroup },
@@ -174,12 +187,19 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 { file, sourceGroup, err },
                 'Error processing IPC query',
               );
-              try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+              try {
+                fs.unlinkSync(filePath);
+              } catch {
+                /* ignore */
+              }
             }
           }
         }
       } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC queries directory');
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC queries directory',
+        );
       }
     }
 
@@ -527,7 +547,13 @@ export async function processTaskIpc(
  * operations that return data — no state mutation.
  */
 function processQuery(
-  data: { type: string; chatJid?: string; hours?: number; include_bot?: boolean; limit?: number },
+  data: {
+    type: string;
+    chatJid?: string;
+    hours?: number;
+    include_bot?: boolean;
+    limit?: number;
+  },
   sourceGroup: string,
   registeredGroups: Record<string, RegisteredGroup>,
 ): unknown {
@@ -553,7 +579,9 @@ function processQuery(
 
       // Optionally filter out bot messages
       if (data.include_bot === false) {
-        messages = messages.filter((m) => !(m as { is_bot_message?: number }).is_bot_message);
+        messages = messages.filter(
+          (m) => !(m as { is_bot_message?: number }).is_bot_message,
+        );
       }
 
       return {
